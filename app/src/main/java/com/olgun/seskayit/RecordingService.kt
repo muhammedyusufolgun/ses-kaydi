@@ -39,7 +39,7 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -120,7 +120,7 @@ class RecordingService : Service() {
         var encoder: Mp3Encoder? = null
         var readSource: AudioSource? = null
         var writerThread: Thread? = null
-        val transcriptQueue = ArrayBlockingQueue<ByteArray>(400)
+        val transcriptQueue = LinkedBlockingQueue<ByteArray>()
         val stopChunk = ByteArray(0)
         val transcriptionActive = AtomicBoolean(true)
         var audioSaved = false
