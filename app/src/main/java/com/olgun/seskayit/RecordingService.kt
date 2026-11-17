@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -121,6 +122,8 @@ class RecordingService : Service() {
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_cassette)
+            .setLargeIcon(BitmapFactory.decodeResource(resources, R.drawable.ic_cassette))
+            .setColor(0xFF65D96E.toInt())
             .setContentTitle("Ses-kayit kayıt yapıyor")
             .setContentText("Hoparlördeki görüşme sesi kaydediliyor")
             .setOngoing(true).setContentIntent(open)
