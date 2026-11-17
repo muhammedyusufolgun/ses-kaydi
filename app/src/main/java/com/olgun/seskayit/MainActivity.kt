@@ -264,8 +264,10 @@ class MainActivity : Activity() {
         livePanel.addView(liveScroll, LinearLayout.LayoutParams(-1, 0, 1f))
         copyLiveButton = Button(this).apply {
             text = "Tümünü Kopyala"
-            setOnClickListener { copyTranscript(liveTranscript.text.toString()) }
+            setBackgroundColor(0xFFFFFFFF.toInt())
+            setTextColor(0xFF202020.toInt())
         }
+        setCopyHold(copyLiveButton) { liveTranscript.text.toString() }
         livePanel.addView(copyLiveButton, LinearLayout.LayoutParams(-1, -2))
         root.addView(livePanel, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(TextView(this).apply {
@@ -374,7 +376,11 @@ class MainActivity : Activity() {
             setTypeface(null, android.graphics.Typeface.BOLD)
             setTextColor(0xFFFFFFFF.toInt())
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        val copyButton = Button(this).apply { text = "Tümünü Kopyala" }
+        val copyButton = Button(this).apply {
+            text = "Tümünü Kopyala"
+            setBackgroundColor(0xFFFFFFFF.toInt())
+            setTextColor(0xFF202020.toInt())
+        }
         toolbar.addView(copyButton)
         page.addView(toolbar, LinearLayout.LayoutParams(-1, -2))
         val transcriptView = TextView(this).apply {
@@ -396,31 +402,57 @@ class MainActivity : Activity() {
         dialog.show()
         dialog.window?.setLayout(-1, -1)
         var transcript = ""
-        copyButton.setOnClickListener { copyTranscript(transcript) }
+        setCopyHold(copyButton) { transcript }
 
         val cached = transcriptFile(file)
         if (cached.isFile) {
             transcript = runCatching { cached.readText() }.getOrDefault("")
-            transcriptView.text = transcript.ifBlank { "Bu kayıt için metin bulunamadı." }
-            copyButton.isEnabled = transcript.isNotBlank()
-            return
+            if (transcript.isNotBlank() && !transcript.contains("ERROR_TYPE_") && !transcript.contains("Speech recognition engine", true)) {
+                transcriptView.text = transcript
+                return
+            }
+            cached.delete()
+            transcript = ""
         }
         transcribeToTurkish(file) { result, succeeded ->
             if (!dialog.isShowing) return@transcribeToTurkish
             transcript = if (succeeded) result else ""
-            transcriptView.text = result
-            copyButton.isEnabled = succeeded && result.isNotBlank()
+            transcriptView.text = if (succeeded && result.isNotBlank()) result else "Bu kayıtta konuşma algılanamadı."
         }
     }
 
-    private fun copyTranscript(text: String) {
-        if (text.isBlank()) {
-            toast("Kopyalanacak metin yok.")
-            return
+    private fun setCopyHold(button: Button, textProvider: () -> String) {
+        val copyAfterHold = Runnable {
+            if (button.isPressed && copyTranscript(textProvider())) {
+                button.performHapticFeedback(
+                    if (Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM
+                    else android.view.HapticFeedbackConstants.LONG_PRESS
+                )
+            }
         }
+        button.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    view.isPressed = true
+                    uiHandler.removeCallbacks(copyAfterHold)
+                    uiHandler.postDelayed(copyAfterHold, 1_000L)
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    uiHandler.removeCallbacks(copyAfterHold)
+                    view.isPressed = false
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
+    private fun copyTranscript(text: String): Boolean {
+        if (text.isBlank()) return false
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Konuşma metni", text))
-        toast("Metnin tümü kopyalandı.")
+        return true
     }
 
     private fun transcribeToTurkish(file: File, onDone: (String, Boolean) -> Unit) {
@@ -462,24 +494,21 @@ class MainActivity : Activity() {
                     this.audioSource = source
                 }
                 val parts = mutableListOf<String>()
-                var recognitionError: String? = null
                 activeRecognizer.startRecognition(request).collect { response ->
                     when (response) {
                         is SpeechRecognizerResponse.FinalTextResponse -> {
                             response.text.trim().takeIf { it.isNotEmpty() }?.let(parts::add)
                         }
-                        is SpeechRecognizerResponse.ErrorResponse -> {
-                            recognitionError = response.e.message
-                        }
+                        is SpeechRecognizerResponse.ErrorResponse -> Unit
                         else -> Unit
                     }
                 }
                 val result = parts.joinToString("\n\n").trim()
-                if (result.isBlank()) throw IllegalStateException(recognitionError ?: "Konuşma metne çevrilemedi.")
+                if (result.isBlank()) throw IllegalStateException("Bu kayıtta konuşma algılanamadı.")
                 transcriptFile(file).writeText(result)
                 onDone(result, true)
-            } catch (error: Exception) {
-                onDone(error.message ?: "Konuşma metne çevrilemedi.", false)
+            } catch (_: Exception) {
+                onDone("Bu kayıtta konuşma algılanamadı.", false)
             } finally {
                 try { audioSource?.close() } catch (_: Exception) {}
                 try { recognizer?.close() } catch (_: Exception) {}
