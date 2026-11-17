@@ -247,7 +247,7 @@ class RecordingService : Service() {
                 else -> throw IllegalStateException("Türkçe ses modeli bu cihazda kullanılamıyor.")
             }
 
-            val request = speechRecognizerRequest { audioSource = source }
+            val request = speechRecognizerRequest { this.audioSource = source }
             recognizer.startRecognition(request).collect { response ->
                 when (response) {
                     is SpeechRecognizerResponse.PartialTextResponse -> {
