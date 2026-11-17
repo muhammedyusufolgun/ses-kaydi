@@ -18,4 +18,6 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("io.github.unicornwhodev:uwdev-mp3codec:0.2.0")
+    implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
