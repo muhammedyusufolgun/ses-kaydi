@@ -165,32 +165,13 @@ class MainActivity : Activity() {
 
         recordButton = Button(this)
         recordButton.setOnClickListener {
-            if (!recording) {
+            if (recording) {
+                stopping = true
+                updateRecordButton()
+                startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
+            } else {
                 blockRestoreUntilStart = false
                 startRecording()
-            }
-        }
-        recordButton.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    if (recording && !stopping) {
-                        stopping = true
-                        longStopTriggered = false
-                        updateRecordButton()
-                        uiHandler.postDelayed(stopAfterHold, 1_000L)
-                        true
-                    } else false
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (recording && stopping && !longStopTriggered) {
-                        uiHandler.removeCallbacks(stopAfterHold)
-                        stopping = false
-                        updateRecordButton()
-                        if (event.actionMasked == MotionEvent.ACTION_UP) toast("Kaydı durdurmak için 1 saniye basılı tutun.")
-                        true
-                    } else recording && stopping
-                }
-                else -> recording && stopping
             }
         }
         root.addView(recordButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8 })
@@ -207,19 +188,25 @@ class MainActivity : Activity() {
             setPadding(2, 4, 2, 0)
         }
         actionPanel.addView(selectionLabel)
-        val buttonRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         renameButton = controlButton("Yeniden Adlandır", "rename") { selectedFile?.let { rename(it) } }
+        deleteButton = controlButton("Sil", "delete") { selectedFile?.let { confirmDelete(it) } }
+        textButton = controlButton("Metin", "text") {
+            selectedFile?.let {
+                if (transcriptPanel.visibility == android.view.View.VISIBLE && displayedTranscriptFile == it) closeTranscriptPanel()
+                else showTranscriptPanel(it)
+            }
+        }
         exportButton = controlButton("İndir", "export") { selectedFile?.let { export(it) } }
         downloadsButton = Button(this).apply {
             text = "Git"
             textSize = 11f
             minWidth = 0
             minimumHeight = 0
-            setPadding(4, 0, 4, 0)
+            setPadding(2, 0, 2, 0)
             setBackgroundColor(0xFFE0E0E0.toInt())
             setTextColor(0xFF303030.toInt())
             setOnClickListener {
@@ -228,29 +215,16 @@ class MainActivity : Activity() {
                 goToDownloads()
             }
         }
-        deleteButton = controlButton("Sil", "delete") { selectedFile?.let { confirmDelete(it) } }
-        textButton = controlButton("Metin", "text") {
-            selectedFile?.let {
-                if (transcriptPanel.visibility == android.view.View.VISIBLE && displayedTranscriptFile == it) closeTranscriptPanel()
-                else showTranscriptPanel(it)
-            }
-        }
         listOf(
-            renameButton to 1.55f,
-            deleteButton to 0.70f,
-            textButton to 0.85f
+            renameButton to 1.30f,
+            deleteButton to 0.60f,
+            textButton to 0.75f,
+            exportButton to 0.75f,
+            downloadsButton to 0.60f
         ).forEach { (button, weight) ->
-            buttons.addView(button, LinearLayout.LayoutParams(0, 44, weight).apply { marginEnd = 3 })
+            buttons.addView(button, LinearLayout.LayoutParams(0, 88, weight).apply { marginEnd = 8 })
         }
-        buttonRows.addView(buttons, LinearLayout.LayoutParams(-1, 44))
-        val downloadButtons = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        downloadButtons.addView(exportButton, LinearLayout.LayoutParams(0, 40, 1f).apply { marginEnd = 3 })
-        downloadButtons.addView(downloadsButton, LinearLayout.LayoutParams(0, 40, 1f))
-        buttonRows.addView(downloadButtons, LinearLayout.LayoutParams(-1, 40).apply { topMargin = 3 })
-        actionPanel.addView(buttonRows)
+        actionPanel.addView(buttons, LinearLayout.LayoutParams(-1, 88))
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
         transcriptPanel = LinearLayout(this).apply {
@@ -357,8 +331,9 @@ class MainActivity : Activity() {
 
     private fun controlButton(label: String, key: String, action: () -> Unit) = Button(this).apply {
         text = label
-        textSize = 10f
+        textSize = 9f
         minWidth = 0
+        minimumHeight = 0
         setPadding(2, 0, 2, 0)
         setOnClickListener { selectedAction = key; updateControlColors(); action() }
     }
@@ -399,17 +374,17 @@ class MainActivity : Activity() {
     private fun updateRecordButton() {
         if (!::recordButton.isInitialized) return
         recordButton.text = when {
-            stopping -> "Kaydı Durdur"
-            recording -> "Kayıt sürüyor · durdurmak için 1 sn basılı tut"
+            stopping -> "Kaydediliyor…"
+            recording -> "Kaydı Durdur"
             else -> "Kaydı Başlat"
         }
         val color = when {
             stopping -> 0xFFFFA726.toInt()
+            recording -> 0xFFFF3B30.toInt()
             else -> 0xFF55B85A.toInt()
         }
         recordButton.setBackgroundColor(color)
         recordButton.setTextColor(0xFF202020.toInt())
-        if (recording && !stopping) recordButton.setBackgroundColor(0xFFFF3B30.toInt())
     }
 
     private fun transcriptFile(audioFile: File) =
