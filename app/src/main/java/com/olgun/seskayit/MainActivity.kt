@@ -13,7 +13,6 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
-import android.provider.OpenableColumns
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -384,9 +383,9 @@ class MainActivity : Activity() {
                 }
                 val activeEncoder = encoder ?: throw IllegalStateException("MP3 dönüştürücü başlatılamadı")
                 activeEncoder.finish()
+                output.flush()
                 activeEncoder.close()
                 encoder = null
-                output.flush()
                 output.close()
                 output = null
                 val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS", Locale.getDefault()).format(Date())
