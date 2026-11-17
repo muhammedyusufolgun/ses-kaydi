@@ -12,6 +12,9 @@ import android.media.MediaPlayer
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
 import android.widget.*
 import androidx.core.app.ActivityCompat
@@ -22,11 +25,14 @@ class MainActivity : Activity() {
     private lateinit var list: LinearLayout
     private lateinit var recordButton: Button
     private var recording = false
+    private var stopping = false
+    private var lastStopTapAt = 0L
     private var player: MediaPlayer? = null
     private var exportFile: File? = null
+    private val uiHandler = Handler(Looper.getMainLooper())
     private val finished = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            recording = false; updateButton(); refresh()
+            recording = false; stopping = false; lastStopTapAt = 0L; updateButton(); refresh()
         }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,11 +56,11 @@ class MainActivity : Activity() {
             setPadding(16, 0, 16, 8)
             setBackgroundColor(0xFFF8F6FC.toInt())
         }
-        // Four text rows of breathing room below the status icons keep the title clear
+        // Two text rows of breathing room below the status icons keep the title clear
         // of the camera cutout, battery and clock area.
-        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 72))
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 36))
         val header = android.widget.FrameLayout(this).apply {
-            setBackgroundColor(0xFFD9C8E8.toInt())
+            setBackgroundColor(0xFF000000.toInt())
             setPadding(8, 6, 8, 6)
         }
         header.addView(ImageView(this).apply {
@@ -66,10 +72,12 @@ class MainActivity : Activity() {
             text = "Ses kaydı"
             textSize = 23f
             gravity = Gravity.CENTER
-            setTextColor(0xFF49305F.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
             setTypeface(null, android.graphics.Typeface.BOLD)
         }, android.widget.FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(header)
+        recordButton = Button(this).apply { setOnClickListener { toggleRecording() } }
+        root.addView(recordButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8 })
         root.addView(TextView(this).apply {
             text = "Telefon görüşmesinde hoparlörü açın. Kaydı burada başlatın ve görüşme bitince durdurun."
             textSize = 15f; setTextColor(0xFF40364A.toInt()); setPadding(4, 16, 4, 12)
@@ -87,17 +95,27 @@ class MainActivity : Activity() {
             setTextColor(0xFF808080.toInt())
             setPadding(0, 8, 0, 0)
         }, LinearLayout.LayoutParams(-1, -2))
-        // Reserve clear space above the bottom control; the footer never overlays list buttons.
+        // Keep the signature and bottom control separate from the scrolling list buttons.
         root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 28))
-        recordButton = Button(this).apply { setOnClickListener { toggleRecording() } }
-        root.addView(recordButton, LinearLayout.LayoutParams(-1, -2))
         setContentView(root)
         updateButton()
     }
     private fun toggleRecording() {
         if (recording) {
-            startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
-            recording = false
+            val now = SystemClock.elapsedRealtime()
+            if (lastStopTapAt > 0L && now - lastStopTapAt <= 2_000L) {
+                lastStopTapAt = 0L
+                stopping = true
+                startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP_DELAYED))
+                updateButton()
+                uiHandler.postDelayed({ stopping = false; updateButton() }, 1_000L)
+            } else {
+                lastStopTapAt = now
+                toast("Durdurmak için 2 saniye içinde tekrar dokunun.")
+                uiHandler.postDelayed({
+                    if (SystemClock.elapsedRealtime() - lastStopTapAt > 2_000L) lastStopTapAt = 0L
+                }, 2_050L)
+            }
         } else {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 20)
@@ -114,9 +132,13 @@ class MainActivity : Activity() {
     }
     private fun updateButton() {
         if (::recordButton.isInitialized) {
-            recordButton.text = if (recording) "Kaydı bitir" else "Kaydı başlat"
-            recordButton.setBackgroundColor(if (recording) 0xFFB93857.toInt() else 0xFF7B49A5.toInt())
-            recordButton.setTextColor(0xFFFFFFFF.toInt())
+            recordButton.text = when {
+                stopping -> "Kaydı Durdur"
+                recording -> "Kayıt sürüyor · durdurmak için 2 kez bas"
+                else -> "Kaydı Başlat"
+            }
+            recordButton.setBackgroundColor(if (stopping) 0xFFFFA726.toInt() else 0xFFB6E3B1.toInt())
+            recordButton.setTextColor(0xFF243024.toInt())
         }
     }
     private fun recordingsDir() = File(getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Ses-kayit").apply { mkdirs() }
