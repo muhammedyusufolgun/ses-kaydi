@@ -71,7 +71,6 @@ class MainActivity : Activity() {
             updateRecordButton()
             uiHandler.postDelayed({
                 refresh()
-                recentlyStopped = false
                 updateRecordButton()
             }, 1_000L)
         }
