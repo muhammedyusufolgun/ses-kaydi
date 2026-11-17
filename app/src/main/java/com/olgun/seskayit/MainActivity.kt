@@ -318,17 +318,17 @@ class MainActivity : Activity() {
             copyButton.isEnabled = transcript.isNotBlank()
             return
         }
-        transcribeToTurkish(file) { result ->
+        transcribeToTurkish(file) { result, succeeded ->
             if (!dialog.isShowing) return@transcribeToTurkish
-            transcript = result
-            transcriptView.text = result.ifBlank { "Konuşmada çözümlenebilir Türkçe ses bulunamadı." }
-            copyButton.isEnabled = result.isNotBlank()
+            transcript = if (succeeded) result else ""
+            transcriptView.text = result
+            copyButton.isEnabled = succeeded && result.isNotBlank()
         }
     }
 
-    private fun transcribeToTurkish(file: File, onDone: (String) -> Unit) {
+    private fun transcribeToTurkish(file: File, onDone: (String, Boolean) -> Unit) {
         if (Build.VERSION.SDK_INT < 31) {
-            onDone("Türkçe ses çözümleme bu Android sürümünde desteklenmiyor.")
+            onDone("Türkçe ses çözümleme bu Android sürümünde desteklenmiyor.", false)
             return
         }
         transcriptionScope.launch {
@@ -339,13 +339,14 @@ class MainActivity : Activity() {
                     locale = Locale.forLanguageTag("tr-TR")
                     preferredMode = SpeechRecognizerOptions.Mode.MODE_BASIC
                 }
-                recognizer = SpeechRecognition.getClient(options)
-                when (recognizer.checkStatus()) {
+                val activeRecognizer = SpeechRecognition.getClient(options)
+                recognizer = activeRecognizer
+                when (activeRecognizer.checkStatus()) {
                     FeatureStatus.AVAILABLE -> Unit
                     FeatureStatus.DOWNLOADABLE -> {
                         var ready = false
                         var failed = false
-                        recognizer.download.collect { status ->
+                        activeRecognizer.download.collect { status ->
                             when (status) {
                                 is DownloadStatus.DownloadCompleted -> ready = true
                                 is DownloadStatus.DownloadFailed -> failed = true
@@ -358,13 +359,14 @@ class MainActivity : Activity() {
                     else -> throw IllegalStateException("Bu cihazda Türkçe ses modeli kullanılamıyor.")
                 }
 
-                audioSource = AudioSource.fromFile(file)
+                val source = AudioSource.fromFile(file)
+                audioSource = source
                 val request = com.google.mlkit.genai.speechrecognition.speechRecognizerRequest {
-                    this.audioSource = audioSource
+                    audioSource = source
                 }
                 val parts = mutableListOf<String>()
                 var recognitionError: String? = null
-                recognizer.startRecognition(request).collect { response ->
+                activeRecognizer.startRecognition(request).collect { response ->
                     when (response) {
                         is SpeechRecognizerResponse.FinalTextResponse -> {
                             response.text.trim().takeIf { it.isNotEmpty() }?.let(parts::add)
@@ -378,9 +380,9 @@ class MainActivity : Activity() {
                 val result = parts.joinToString("\n\n").trim()
                 if (result.isBlank()) throw IllegalStateException(recognitionError ?: "Konuşma metne çevrilemedi.")
                 transcriptFile(file).writeText(result)
-                onDone(result)
+                onDone(result, true)
             } catch (error: Exception) {
-                onDone(error.message ?: "Konuşma metne çevrilemedi.")
+                onDone(error.message ?: "Konuşma metne çevrilemedi.", false)
             } finally {
                 try { audioSource?.close() } catch (_: Exception) {}
                 try { recognizer?.close() } catch (_: Exception) {}
