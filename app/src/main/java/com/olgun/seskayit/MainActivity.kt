@@ -9,6 +9,17 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.net.Uri
+import android.provider.OpenableColumns
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import dev.unicornwhodev.mp3codec.Mp3Encoder
+import dev.unicornwhodev.mp3codec.Mp3EncoderConfig
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -146,6 +157,17 @@ class MainActivity : Activity() {
         }
         root.addView(recordButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8 })
 
+        val builtInCallButton = Button(this).apply {
+            text = "Yerleşik çağrı kaydı"
+            setOnClickListener { openBuiltInCallRecorder() }
+        }
+        root.addView(builtInCallButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 6 })
+        val importCallButton = Button(this).apply {
+            text = "Telefon kaydını içe aktar"
+            setOnClickListener { chooseBuiltInRecording() }
+        }
+        root.addView(importCallButton, LinearLayout.LayoutParams(-1, -2))
+
         actionPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(6, 2, 6, 4)
@@ -183,7 +205,7 @@ class MainActivity : Activity() {
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
         root.addView(TextView(this).apply {
-            text = "Android, telefon görüşmesi sırasında üçüncü taraf uygulamaların mikrofonunu susturabilir; bu durumda kayıt sessiz olabilir. Görüşme kaydı için cihazınızın yerleşik çağrı kayıt özelliğini kullanın."
+            text = "Çağrı kaydı Samsung Telefon uygulamasında yapılır. Görüşme bitince kaydı buraya aktarabilirsiniz."
             textSize = 14f
             setTextColor(0xFF40364A.toInt())
             setPadding(4, 8, 4, 4)
@@ -258,6 +280,137 @@ class MainActivity : Activity() {
         }
         recordButton.setBackgroundColor(color)
         recordButton.setTextColor(0xFF202020.toInt())
+    }
+
+    private fun openBuiltInCallRecorder() {
+        AlertDialog.Builder(this)
+            .setTitle("Cihazın çağrı kaydı")
+            .setMessage("Telefonu açın ve aramayı Samsung Telefon uygulamasından yapın. Görüşme ekranında Kaydet düğmesine dokunun veya Telefon > ⋮ > Ayarlar bölümünde Aramaları kaydet seçeneğini etkinleştirin. Seçenek cihazınızda görünmüyorsa bölge/yazılım sürümü bu özelliği sunmuyor olabilir. Görüşme bittikten sonra bu uygulamaya dönüp kaydı içe aktarın.")
+            .setNegativeButton("Kapat", null)
+            .setPositiveButton("Telefonu aç") { _, _ ->
+                try { startActivity(Intent(Intent.ACTION_DIAL)) }
+                catch (_: Exception) { toast("Telefon uygulaması açılamadı.") }
+            }.show()
+    }
+
+    private fun chooseBuiltInRecording() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+        }
+        startActivityForResult(intent, 31)
+    }
+
+    private fun importBuiltInRecording(uri: Uri) {
+        Thread {
+            val dir = recordingsDir()
+            val temp = File(dir, ".import-${System.currentTimeMillis()}.part")
+            var extractor: MediaExtractor? = null
+            var decoder: MediaCodec? = null
+            var output: FileOutputStream? = null
+            var encoder: Mp3Encoder? = null
+            var success = false
+            try {
+                extractor = MediaExtractor()
+                extractor.setDataSource(this, uri, null)
+                var audioTrack = -1
+                var inputFormat: MediaFormat? = null
+                for (i in 0 until extractor.trackCount) {
+                    val candidate = extractor.getTrackFormat(i)
+                    if (candidate.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+                        audioTrack = i
+                        inputFormat = candidate
+                        break
+                    }
+                }
+                if (audioTrack < 0 || inputFormat == null) throw IllegalArgumentException("Ses akışı bulunamadı")
+                extractor.selectTrack(audioTrack)
+                val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: throw IllegalArgumentException("Ses biçimi tanınmadı")
+                decoder = MediaCodec.createDecoderByType(mime)
+                decoder.configure(inputFormat, null, null, 0)
+                decoder.start()
+                output = FileOutputStream(temp)
+
+                var inputDone = false
+                var outputDone = false
+                val info = MediaCodec.BufferInfo()
+                while (!outputDone) {
+                    if (!inputDone) {
+                        val inputIndex = decoder.dequeueInputBuffer(10_000)
+                        if (inputIndex >= 0) {
+                            val inputBuffer = decoder.getInputBuffer(inputIndex)!!
+                            inputBuffer.clear()
+                            val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                            if (sampleSize < 0) {
+                                decoder.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputDone = true
+                            } else {
+                                decoder.queueInputBuffer(inputIndex, 0, sampleSize, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                    val outputIndex = decoder.dequeueOutputBuffer(info, 10_000)
+                    when {
+                        outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            val decodedFormat = decoder.outputFormat
+                            val sampleRate = decodedFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            val channels = decodedFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceIn(1, 2)
+                            encoder = Mp3Encoder.open(Mp3EncoderConfig(sampleRate, channels, 128), output)
+                        }
+                        outputIndex >= 0 -> {
+                            if (info.size > 0) {
+                                val buffer = decoder.getOutputBuffer(outputIndex)!!
+                                buffer.position(info.offset)
+                                buffer.limit(info.offset + info.size)
+                                val pcm = ByteArray(info.size)
+                                buffer.get(pcm)
+                                val activeEncoder = encoder ?: run {
+                                    val decodedFormat = decoder.outputFormat
+                                    Mp3Encoder.open(
+                                        Mp3EncoderConfig(
+                                            decodedFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE),
+                                            decodedFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceIn(1, 2),
+                                            128
+                                        ), output
+                                    ).also { encoder = it }
+                                }
+                                activeEncoder.writePcm16Le(pcm)
+                            }
+                            outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                            decoder.releaseOutputBuffer(outputIndex, false)
+                        }
+                    }
+                }
+                val activeEncoder = encoder ?: throw IllegalStateException("MP3 dönüştürücü başlatılamadı")
+                activeEncoder.finish()
+                activeEncoder.close()
+                encoder = null
+                output.flush()
+                output.close()
+                output = null
+                val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS", Locale.getDefault()).format(Date())
+                var destination = File(dir, "$stamp.mp3")
+                var suffix = 1
+                while (destination.exists()) destination = File(dir, "$stamp-$suffix.mp3").also { suffix++ }
+                success = temp.renameTo(destination)
+            } catch (_: Exception) {
+                temp.delete()
+            } finally {
+                try { encoder?.close() } catch (_: Exception) {}
+                try { output?.close() } catch (_: Exception) {}
+                try { decoder?.stop() } catch (_: Exception) {}
+                try { decoder?.release() } catch (_: Exception) {}
+                try { extractor?.release() } catch (_: Exception) {}
+                if (!success) temp.delete()
+                runOnUiThread {
+                    if (success) {
+                        refresh()
+                        toast("Yerleşik çağrı kaydı MP3 olarak eklendi.")
+                    } else toast("Çağrı kaydı içe aktarılamadı.")
+                }
+            }
+        }.start()
     }
 
     private fun recordingsDir() = File(getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Ses-kayit").apply { mkdirs() }
@@ -410,6 +563,8 @@ class MainActivity : Activity() {
                 contentResolver.openOutputStream(data.data!!)?.use { output -> exportFile!!.inputStream().use { it.copyTo(output) } }
                 toast("MP3 dışa aktarıldı.")
             } catch (_: Exception) { toast("Dışa aktarma başarısız oldu.") }
+        } else if (requestCode == 31 && resultCode == RESULT_OK && data?.data != null) {
+            importBuiltInRecording(data.data!!)
         }
     }
 
