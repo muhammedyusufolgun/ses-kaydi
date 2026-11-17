@@ -148,10 +148,17 @@ class RecordingService : Service() {
                     writerThread = Thread({
                         try {
                             ParcelFileDescriptor.AutoCloseOutputStream(writeDescriptor).use { output ->
+                                var startedAt = 0L
+                                var bytesWritten = 0L
                                 while (true) {
                                     val chunk = transcriptQueue.take()
                                     if (chunk.isEmpty()) break
+                                    if (startedAt == 0L) startedAt = System.nanoTime()
                                     output.write(chunk)
+                                    bytesWritten += chunk.size
+                                    val due = startedAt + (bytesWritten * 1_000_000_000L / 32_000L)
+                                    val delay = due - System.nanoTime()
+                                    if (delay > 0L) TimeUnit.NANOSECONDS.sleep(delay)
                                 }
                             }
                         } catch (_: Exception) {
@@ -297,13 +304,13 @@ class RecordingService : Service() {
                         publishTranscript(confirmed.toString(), true)
                     }
                     is SpeechRecognizerResponse.ErrorResponse -> {
-                        publishTranscriptIfEmpty(response.e.message ?: "Türkçe metin çözümlenemedi.")
+                        publishTranscriptIfEmpty("Bu kayıtta konuşma algılanamadı.")
                     }
                     else -> Unit
                 }
             }
-        } catch (error: Exception) {
-            publishTranscriptIfEmpty(error.message ?: "Türkçe metin çözümlenemedi.")
+        } catch (_: Exception) {
+            publishTranscriptIfEmpty("Bu kayıtta konuşma algılanamadı.")
         } finally {
             try { source.close() } catch (_: Exception) {}
             try { recognizer.close() } catch (_: Exception) {}
