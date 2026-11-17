@@ -43,22 +43,54 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
     private fun buildUi() {
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(16, 18, 16, 10); setBackgroundColor(0xFFF8F6FC.toInt()) }
-        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(12, 8, 12, 8); setBackgroundColor(0xFFC9A7F5.toInt()) }
-        header.addView(ImageView(this).apply { setImageResource(R.drawable.ic_cassette); layoutParams = LinearLayout.LayoutParams(52, 52) })
-        header.addView(TextView(this).apply { text = "  Ses-kayit"; textSize = 24f; setTextColor(0xFF352047.toInt()); setTypeface(null, android.graphics.Typeface.BOLD) })
+        window.statusBarColor = 0xFFF8F6FC.toInt()
+        window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 0, 16, 8)
+            setBackgroundColor(0xFFF8F6FC.toInt())
+        }
+        // Four text rows of breathing room below the status icons keep the title clear
+        // of the camera cutout, battery and clock area.
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 72))
+        val header = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(0xFFD9C8E8.toInt())
+            setPadding(8, 6, 8, 6)
+        }
+        header.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_cassette)
+            layoutParams = android.widget.FrameLayout.LayoutParams(52, 52, Gravity.CENTER_VERTICAL or Gravity.START)
+            contentDescription = "REC"
+        })
+        header.addView(TextView(this).apply {
+            text = "Ses kaydı"
+            textSize = 23f
+            gravity = Gravity.CENTER
+            setTextColor(0xFF49305F.toInt())
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }, android.widget.FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(header)
         root.addView(TextView(this).apply {
             text = "Telefon görüşmesinde hoparlörü açın. Kaydı burada başlatın ve görüşme bitince durdurun."
             textSize = 15f; setTextColor(0xFF40364A.toInt()); setPadding(4, 16, 4, 12)
         })
-        recordButton = Button(this).apply { setOnClickListener { toggleRecording() } }
-        root.addView(recordButton, LinearLayout.LayoutParams(-1, -2))
         root.addView(TextView(this).apply { text = "Kayıtlar"; textSize = 20f; setTypeface(null, android.graphics.Typeface.BOLD); setTextColor(0xFF352047.toInt()); setPadding(2, 18, 2, 8) })
         val scroll = ScrollView(this)
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(list)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        root.addView(TextView(this).apply {
+            text = "Muhammed Yusuf OLGUN"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(0xFF808080.toInt())
+            setPadding(0, 8, 0, 0)
+        }, LinearLayout.LayoutParams(-1, -2))
+        // Reserve clear space above the bottom control; the footer never overlays list buttons.
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 28))
+        recordButton = Button(this).apply { setOnClickListener { toggleRecording() } }
+        root.addView(recordButton, LinearLayout.LayoutParams(-1, -2))
         setContentView(root)
         updateButton()
     }
