@@ -193,7 +193,7 @@ class RecordingService : Service() {
             while (!transcriptQueue.offer(stopChunk, 250, TimeUnit.MILLISECONDS)) {
                 if (recognitionJob?.isCompleted == true) break
             }
-            writerThread.join(3_000)
+            writerThread?.join(3_000)
             runBlocking { recognitionJob?.join() }
 
             if (temporaryAudio.length() > 0) {
