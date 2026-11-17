@@ -10,7 +10,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.MediaPlayer
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
@@ -45,7 +44,6 @@ class MainActivity : Activity() {
     private lateinit var recordButton: Button
     private lateinit var actionPanel: LinearLayout
     private lateinit var selectionLabel: TextView
-    private lateinit var playButton: Button
     private lateinit var renameButton: Button
     private lateinit var exportButton: Button
     private lateinit var deleteButton: Button
@@ -55,9 +53,6 @@ class MainActivity : Activity() {
     private lateinit var transcriptCopyButton: Button
     private var displayedTranscriptFile: File? = null
     private val durationCache = mutableMapOf<String, String>()
-    private lateinit var progressPanel: LinearLayout
-    private lateinit var progressBar: SeekBar
-    private lateinit var progressLabel: TextView
     private lateinit var recordingsPanel: LinearLayout
     private lateinit var livePanel: LinearLayout
     private lateinit var liveTranscript: TextView
@@ -68,23 +63,10 @@ class MainActivity : Activity() {
     private var longStopTriggered = false
     private var selectedFile: File? = null
     private var selectedAction: String? = null
-    private var player: MediaPlayer? = null
-    private var playerPrepared = false
-    private var playingFile: File? = null
     private var exportFile: File? = null
     private val transcriptionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val uiHandler = Handler(Looper.getMainLooper())
 
-    private val progressTicker = object : Runnable {
-        override fun run() {
-            val activePlayer = player ?: return
-            if (activePlayer.isPlaying && !progressBar.isPressed) {
-                progressBar.progress = activePlayer.currentPosition
-                progressLabel.text = formatTime(activePlayer.currentPosition) + " / " + formatTime(activePlayer.duration)
-            }
-            uiHandler.postDelayed(this, 250L)
-        }
-    }
     private val stopAfterHold = Runnable {
         if (recording && stopping) {
             longStopTriggered = true
@@ -139,13 +121,11 @@ class MainActivity : Activity() {
         updateRecordingPanels()
         updateRecordButton()
     }
-    override fun onPause() { stopPlayback(); super.onPause() }
+    override fun onPause() { super.onPause() }
     override fun onDestroy() {
         try { unregisterReceiver(finished) } catch (_: Exception) {}
         try { unregisterReceiver(transcriptUpdates) } catch (_: Exception) {}
         uiHandler.removeCallbacksAndMessages(null)
-        player?.release()
-        player = null
         transcriptionScope.cancel()
         super.onDestroy()
     }
@@ -217,8 +197,7 @@ class MainActivity : Activity() {
         }
         actionPanel.addView(selectionLabel)
         val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        playButton = controlButton("Oynat", "play") { selectedFile?.let { play(it) } }
-        renameButton = controlButton("Ad", "rename") { selectedFile?.let { rename(it) } }
+        renameButton = controlButton("Yeniden Adlandır", "rename") { selectedFile?.let { rename(it) } }
         exportButton = controlButton("İndir", "export") { selectedFile?.let { export(it) } }
         deleteButton = controlButton("Sil", "delete") { selectedFile?.let { confirmDelete(it) } }
         textButton = controlButton("Metin", "text") {
@@ -227,24 +206,15 @@ class MainActivity : Activity() {
                 else showTranscriptPanel(it)
             }
         }
-        listOf(playButton, renameButton, exportButton, deleteButton, textButton).forEach { button ->
-            buttons.addView(button, LinearLayout.LayoutParams(0, 44, 1f).apply { marginEnd = 3 })
+        listOf(
+            renameButton to 1.55f,
+            exportButton to 0.85f,
+            deleteButton to 0.70f,
+            textButton to 0.85f
+        ).forEach { (button, weight) ->
+            buttons.addView(button, LinearLayout.LayoutParams(0, 44, weight).apply { marginEnd = 3 })
         }
         actionPanel.addView(buttons)
-        progressPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            visibility = android.view.View.GONE
-        }
-        progressBar = SeekBar(this)
-        progressPanel.addView(progressBar, LinearLayout.LayoutParams(0, 40, 1f))
-        progressLabel = TextView(this).apply {
-            textSize = 11f
-            setTextColor(0xFF555555.toInt())
-            setPadding(6, 0, 2, 0)
-        }
-        progressPanel.addView(progressLabel)
-        actionPanel.addView(progressPanel)
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
         transcriptPanel = LinearLayout(this).apply {
@@ -335,15 +305,6 @@ class MainActivity : Activity() {
         root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 180))
         setContentView(root)
 
-        progressBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (fromUser) progressLabel.text = formatTime(progress) + " / " + formatTime(player?.duration ?: 0)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                if (playerPrepared) player?.seekTo(seekBar?.progress ?: 0)
-            }
-        })
         updateRecordButton()
         renderSelectedControls()
         updateRecordingPanels()
@@ -360,7 +321,7 @@ class MainActivity : Activity() {
 
     private fun controlButton(label: String, key: String, action: () -> Unit) = Button(this).apply {
         text = label
-        textSize = 12f
+        textSize = 10f
         minWidth = 0
         setPadding(2, 0, 2, 0)
         setOnClickListener { selectedAction = key; updateControlColors(); action() }
@@ -492,11 +453,9 @@ class MainActivity : Activity() {
                 val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                 val estimatedMs = if (durationMs > 0L) durationMs else file.length() * 8_000L / 128_000L
                 val totalSeconds = (estimatedMs / 1000L).coerceAtLeast(0L)
-                val hours = totalSeconds / 3600
-                val minutes = (totalSeconds % 3600) / 60
+                val minutes = totalSeconds / 60
                 val seconds = totalSeconds % 60
-                if (hours > 0) String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
-                else String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+                String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
             } catch (_: Exception) {
                 "00:00"
             } finally {
@@ -582,7 +541,7 @@ class MainActivity : Activity() {
         }
         files.forEachIndexed { index, file ->
             val row = TextView(this).apply {
-                text = (index + 1).toString() + ".  " + file.nameWithoutExtension.replace('_', ' ') + "\nSüre: " + recordingDuration(file)
+                text = (index + 1).toString() + ".  " + file.nameWithoutExtension.replace('_', ' ') + "  (" + recordingDuration(file) + ")"
                 textSize = 15f
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setTextColor(0xFF302638.toInt())
@@ -608,86 +567,15 @@ class MainActivity : Activity() {
         actionPanel.visibility = if (file?.exists() == true) android.view.View.VISIBLE else android.view.View.GONE
         if (file == null || !file.exists()) return
         selectionLabel.text = "Seçili: " + file.nameWithoutExtension.replace('_', ' ')
-        playButton.text = when {
-            playingFile == file && player != null && !playerPrepared -> "Açılıyor…"
-            playerPrepared && player?.isPlaying == true && playingFile == file -> "Duraklat"
-            else -> "Oynat"
-        }
-        playButton.isEnabled = !(playingFile == file && player != null && !playerPrepared)
-        progressPanel.visibility = if (player != null && playingFile == file) android.view.View.VISIBLE else android.view.View.GONE
         updateControlColors()
     }
 
     private fun updateControlColors() {
         if (!::actionPanel.isInitialized) return
-        listOf("play" to playButton, "rename" to renameButton, "export" to exportButton, "delete" to deleteButton, "text" to textButton).forEach { (key, button) ->
+        listOf("rename" to renameButton, "export" to exportButton, "delete" to deleteButton, "text" to textButton).forEach { (key, button) ->
             button.setBackgroundColor(if (selectedAction == key) 0xFF777777.toInt() else 0xFFE0E0E0.toInt())
             button.setTextColor(if (selectedAction == key) 0xFFFFFFFF.toInt() else 0xFF303030.toInt())
         }
-    }
-
-    private fun play(file: File) {
-        try {
-            if (playingFile == file && player != null) {
-                if (!playerPrepared) return
-                if (player!!.isPlaying) player!!.pause() else player!!.start()
-                renderSelectedControls()
-                return
-            }
-            stopPlayback()
-            val newPlayer = MediaPlayer()
-            player = newPlayer
-            playingFile = file
-            playerPrepared = false
-            progressPanel.visibility = android.view.View.VISIBLE
-            progressBar.max = 1
-            progressBar.progress = 0
-            progressLabel.text = "00:00 / --:--"
-            newPlayer.setOnPreparedListener { readyPlayer ->
-                if (player !== readyPlayer) return@setOnPreparedListener
-                playerPrepared = true
-                progressBar.max = readyPlayer.duration.coerceAtLeast(1)
-                progressLabel.text = "00:00 / " + formatTime(readyPlayer.duration)
-                readyPlayer.start()
-                uiHandler.removeCallbacks(progressTicker)
-                uiHandler.post(progressTicker)
-                renderSelectedControls()
-            }
-            newPlayer.setOnCompletionListener { finishedPlayer ->
-                if (player === finishedPlayer) {
-                    stopPlayback()
-                    selectedAction = "play"
-                    renderSelectedControls()
-                }
-            }
-            newPlayer.setOnErrorListener { failedPlayer, _, _ ->
-                if (player === failedPlayer) stopPlayback()
-                true
-            }
-            newPlayer.setDataSource(file.absolutePath)
-            newPlayer.prepareAsync()
-            renderSelectedControls()
-        } catch (_: Exception) {
-            stopPlayback()
-        }
-    }
-
-    private fun stopPlayback() {
-        uiHandler.removeCallbacks(progressTicker)
-        try { player?.stop() } catch (_: Exception) {}
-        try { player?.release() } catch (_: Exception) {}
-        player = null
-        playerPrepared = false
-        playingFile = null
-        if (::progressPanel.isInitialized) {
-            progressPanel.visibility = android.view.View.GONE
-            if (::actionPanel.isInitialized) renderSelectedControls()
-        }
-    }
-
-    private fun formatTime(milliseconds: Int): String {
-        val seconds = (milliseconds / 1000).coerceAtLeast(0)
-        return String.format("%02d:%02d", seconds / 60, seconds % 60)
     }
 
     private fun rename(file: File) {
@@ -717,7 +605,6 @@ class MainActivity : Activity() {
                     .setMessage("Bu kayıt kalıcı olarak silinecek. Emin misiniz?")
                     .setNegativeButton("Vazgeç", null)
                     .setPositiveButton("Kalıcı sil") { _, _ ->
-                        if (playingFile == file) stopPlayback()
                         closeTranscriptPanel()
                         file.delete()
                         transcriptFile(file).delete()
