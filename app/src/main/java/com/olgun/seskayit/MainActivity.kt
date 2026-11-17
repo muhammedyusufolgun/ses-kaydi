@@ -206,7 +206,7 @@ class MainActivity : Activity() {
             setTextColor(0xFF808080.toInt())
             setPadding(0, 8, 0, 0)
         }, LinearLayout.LayoutParams(-1, -2))
-        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 108))
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 180))
         setContentView(root)
 
         progressBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
