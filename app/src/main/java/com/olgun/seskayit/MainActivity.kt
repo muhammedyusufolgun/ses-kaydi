@@ -113,13 +113,25 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(transcriptUpdates, transcriptFilter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(transcriptUpdates, transcriptFilter)
         val prefs = getSharedPreferences("recording_state", MODE_PRIVATE)
-        recording = prefs.getBoolean("active", false)
-        liveTranscript.text = prefs.getString("live_transcript", "").orEmpty().ifBlank { "Konuşma algılanıyor…" }
+        recording = RecordingService.serviceRunning
+        if (recording) {
+            liveTranscript.text = prefs.getString("live_transcript", "").orEmpty().ifBlank { "Konuşma algılanıyor…" }
+        } else {
+            prefs.edit().putBoolean("active", false).apply()
+            liveTranscript.text = "Konuşma algılanıyor…"
+        }
         refresh()
         updateRecordingPanels()
         updateRecordButton()
     }
-    override fun onResume() { super.onResume(); refresh() }
+    override fun onResume() {
+        super.onResume()
+        recording = RecordingService.serviceRunning
+        if (!recording) stopping = false
+        refresh()
+        updateRecordingPanels()
+        updateRecordButton()
+    }
     override fun onPause() { stopPlayback(); super.onPause() }
     override fun onDestroy() {
         try { unregisterReceiver(finished) } catch (_: Exception) {}
