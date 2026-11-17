@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
@@ -137,6 +138,7 @@ class RecordingService : Service() {
             mp3Stream = FileOutputStream(temporaryAudio)
             encoder = Mp3Encoder.open(Mp3EncoderConfig(sampleRate, 1, 128), mp3Stream)
             audio.startRecording()
+            val recordingStartedAt = SystemClock.elapsedRealtime()
 
             // Microphone-to-MP3 recording starts first. Speech setup is optional and
             // must never cancel the audio recording if model or pipe setup fails.
@@ -205,11 +207,14 @@ class RecordingService : Service() {
 
             if (temporaryAudio.length() > 0) {
                 val endStamp = SimpleDateFormat("dd-MM-yyyy HH:mm", Locale.getDefault()).format(Date())
-                var baseName = endStamp
+                val elapsedSeconds = ((SystemClock.elapsedRealtime() - recordingStartedAt) / 1_000L).coerceAtLeast(0L)
+                val durationStamp = String.format(Locale.getDefault(), "%02d:%02d", elapsedSeconds / 60L, elapsedSeconds % 60L)
+                val fileStem = "$endStamp  ($durationStamp)"
+                var baseName = fileStem
                 var suffix = 1
                 var destinationAudio = File(dir, "$baseName.mp3")
                 while (destinationAudio.exists()) {
-                    baseName = "$endStamp-$suffix"
+                    baseName = "$fileStem-$suffix"
                     destinationAudio = File(dir, "$baseName.mp3")
                     suffix++
                 }
