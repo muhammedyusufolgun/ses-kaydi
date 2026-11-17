@@ -207,22 +207,18 @@ class MainActivity : Activity() {
             setPadding(2, 4, 2, 0)
         }
         actionPanel.addView(selectionLabel)
+        val buttonRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         renameButton = controlButton("Yeniden Adlandır", "rename") { selectedFile?.let { rename(it) } }
         exportButton = controlButton("İndir", "export") { selectedFile?.let { export(it) } }
-        val downloadColumn = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-        }
-        downloadColumn.addView(exportButton, LinearLayout.LayoutParams(-1, 34))
         downloadsButton = Button(this).apply {
             text = "Git"
             textSize = 11f
             minWidth = 0
-            minimumHeight = 28
+            minimumHeight = 0
             setPadding(4, 0, 4, 0)
             setBackgroundColor(0xFFE0E0E0.toInt())
             setTextColor(0xFF303030.toInt())
@@ -232,7 +228,6 @@ class MainActivity : Activity() {
                 goToDownloads()
             }
         }
-        downloadColumn.addView(downloadsButton, LinearLayout.LayoutParams(-1, 30))
         deleteButton = controlButton("Sil", "delete") { selectedFile?.let { confirmDelete(it) } }
         textButton = controlButton("Metin", "text") {
             selectedFile?.let {
@@ -247,8 +242,15 @@ class MainActivity : Activity() {
         ).forEach { (button, weight) ->
             buttons.addView(button, LinearLayout.LayoutParams(0, 44, weight).apply { marginEnd = 3 })
         }
-        buttons.addView(downloadColumn, LinearLayout.LayoutParams(0, 64, 0.85f).apply { marginEnd = 3 })
-        actionPanel.addView(buttons)
+        buttonRows.addView(buttons, LinearLayout.LayoutParams(-1, 44))
+        val downloadButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        downloadButtons.addView(exportButton, LinearLayout.LayoutParams(0, 40, 1f).apply { marginEnd = 3 })
+        downloadButtons.addView(downloadsButton, LinearLayout.LayoutParams(0, 40, 1f))
+        buttonRows.addView(downloadButtons, LinearLayout.LayoutParams(-1, 40).apply { topMargin = 3 })
+        actionPanel.addView(buttonRows)
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
         transcriptPanel = LinearLayout(this).apply {
