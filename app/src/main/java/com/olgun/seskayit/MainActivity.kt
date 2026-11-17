@@ -243,8 +243,8 @@ class MainActivity : Activity() {
         }
         listOf(
             renameButton to 1.30f,
-            deleteButton to 0.60f,
             textButton to 0.75f,
+            deleteButton to 0.60f,
             exportButton to 0.75f,
             downloadsButton to 0.60f
         ).forEach { (button, weight) ->
