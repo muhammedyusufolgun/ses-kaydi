@@ -59,6 +59,7 @@ class MainActivity : Activity() {
     private lateinit var copyLiveButton: Button
 
     private var recording = false
+    private var blockRestoreUntilStart = false
     private var stopping = false
     private var longStopTriggered = false
     private var selectedFile: File? = null
@@ -102,20 +103,22 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(transcriptUpdates, transcriptFilter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(transcriptUpdates, transcriptFilter)
         val prefs = getSharedPreferences("recording_state", MODE_PRIVATE)
-        recording = RecordingService.serviceRunning
-        if (recording) {
-            liveTranscript.text = prefs.getString("live_transcript", "").orEmpty().ifBlank { "Konuşma algılanıyor…" }
-        } else {
+        blockRestoreUntilStart = savedInstanceState == null && RecordingService.serviceRunning
+        if (blockRestoreUntilStart) {
+            startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
+            prefs.edit().putBoolean("active", false).putString("live_transcript", "").apply()
+        } else if (!RecordingService.serviceRunning) {
             prefs.edit().putBoolean("active", false).apply()
-            liveTranscript.text = "Konuşma algılanıyor…"
         }
+        recording = false
+        liveTranscript.text = "Konuşma algılanıyor…"
         refresh()
         updateRecordingPanels()
         updateRecordButton()
     }
     override fun onResume() {
         super.onResume()
-        recording = RecordingService.serviceRunning
+        recording = !blockRestoreUntilStart && RecordingService.serviceRunning
         if (!recording) stopping = false
         refresh()
         updateRecordingPanels()
@@ -158,17 +161,22 @@ class MainActivity : Activity() {
         root.addView(header)
 
         recordButton = Button(this)
+        recordButton.setOnClickListener {
+            if (!recording) {
+                blockRestoreUntilStart = false
+                startRecording()
+            }
+        }
         recordButton.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    if (!recording) startRecording()
-                    else if (!stopping) {
+                    if (recording && !stopping) {
                         stopping = true
                         longStopTriggered = false
                         updateRecordButton()
                         uiHandler.postDelayed(stopAfterHold, 1_000L)
-                    }
-                    true
+                        true
+                    } else false
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (recording && stopping && !longStopTriggered) {
@@ -176,10 +184,10 @@ class MainActivity : Activity() {
                         stopping = false
                         updateRecordButton()
                         if (event.actionMasked == MotionEvent.ACTION_UP) toast("Kaydı durdurmak için 1 saniye basılı tutun.")
-                    }
-                    true
+                        true
+                    } else recording && stopping
                 }
-                else -> true
+                else -> recording && stopping
             }
         }
         root.addView(recordButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8 })
@@ -332,6 +340,7 @@ class MainActivity : Activity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 20)
             return
         }
+        blockRestoreUntilStart = false
         recording = true
         stopping = false
         longStopTriggered = false
