@@ -76,16 +76,17 @@ class RecordingService : Service() {
         val min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (min <= 0) { finishService(startId); return }
         val size = maxOf(min, 8192)
-        val audio = AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
-        recorder = audio
-        val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault()).format(Date())
         val dir = File(getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC), "Ses-kayit").apply { mkdirs() }
-        val destination = File(dir, "$stamp.mp3")
+        val temporary = File(dir, ".recording-${System.currentTimeMillis()}.part")
+        var audio: AudioRecord? = null
         var stream: FileOutputStream? = null
         var encoder: Mp3Encoder? = null
         var successful = false
         try {
-            stream = FileOutputStream(destination)
+            audio = AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
+            if (audio.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("Mikrofon başlatılamadı")
+            recorder = audio
+            stream = FileOutputStream(temporary)
             encoder = Mp3Encoder.open(Mp3EncoderConfig(rate, 1, 128), stream)
             audio.startRecording()
             val pcm = ByteArray(size)
@@ -95,17 +96,28 @@ class RecordingService : Service() {
             }
             encoder.finish()
             stream.flush()
-            successful = destination.length() > 0
+            encoder.close()
+            encoder = null
+            stream.close()
+            stream = null
+
+            if (temporary.length() > 0) {
+                val endStamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS", Locale.getDefault()).format(Date())
+                var destination = File(dir, "$endStamp.mp3")
+                var suffix = 1
+                while (destination.exists()) destination = File(dir, "$endStamp-$suffix.mp3").also { suffix++ }
+                successful = temporary.renameTo(destination)
+            }
         } catch (_: Exception) {
-            destination.delete()
+            temporary.delete()
         } finally {
             running.set(false)
-            try { audio.stop() } catch (_: Exception) {}
-            audio.release()
+            try { audio?.stop() } catch (_: Exception) {}
+            audio?.release()
             recorder = null
             try { encoder?.close() } catch (_: Exception) {}
             try { stream?.close() } catch (_: Exception) {}
-            if (!successful) destination.delete()
+            if (!successful) temporary.delete()
             finishService(startId)
         }
     }
@@ -125,7 +137,7 @@ class RecordingService : Service() {
             .setLargeIcon(BitmapFactory.decodeResource(resources, R.drawable.ic_cassette))
             .setColor(0xFF65D96E.toInt())
             .setContentTitle("Ses-kayit kayıt yapıyor")
-            .setContentText("Hoparlördeki görüşme sesi kaydediliyor")
+            .setContentText("Mikrofon üzerinden ses kaydı etkin")
             .setOngoing(true).setContentIntent(open)
             .addAction(0, "Kaydı bitir", stop).build()
     }
