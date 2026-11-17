@@ -3,6 +3,7 @@ package com.olgun.seskayit
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.BroadcastReceiver
@@ -51,6 +52,10 @@ class MainActivity : Activity() {
     private lateinit var progressPanel: LinearLayout
     private lateinit var progressBar: SeekBar
     private lateinit var progressLabel: TextView
+    private lateinit var recordingsPanel: LinearLayout
+    private lateinit var livePanel: LinearLayout
+    private lateinit var liveTranscript: TextView
+    private lateinit var copyLiveButton: Button
 
     private var recording = false
     private var stopping = false
@@ -79,12 +84,18 @@ class MainActivity : Activity() {
             startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
         }
     }
+    private val transcriptUpdates = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            liveTranscript.text = intent?.getStringExtra(RecordingService.EXTRA_TRANSCRIPT).orEmpty().ifBlank { "Konuşma algılanıyor…" }
+        }
+    }
     private val finished = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             recording = false
             stopping = false
             longStopTriggered = false
             updateRecordButton()
+            updateRecordingPanels()
             uiHandler.postDelayed({
                 refresh()
                 updateRecordButton()
@@ -98,12 +109,21 @@ class MainActivity : Activity() {
         val filter = IntentFilter(RecordingService.ACTION_FINISHED)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(finished, filter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(finished, filter)
+        val transcriptFilter = IntentFilter(RecordingService.ACTION_TRANSCRIPT)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(transcriptUpdates, transcriptFilter, RECEIVER_NOT_EXPORTED)
+        else registerReceiver(transcriptUpdates, transcriptFilter)
+        val prefs = getSharedPreferences("recording_state", MODE_PRIVATE)
+        recording = prefs.getBoolean("active", false)
+        liveTranscript.text = prefs.getString("live_transcript", "").orEmpty().ifBlank { "Konuşma algılanıyor…" }
         refresh()
+        updateRecordingPanels()
+        updateRecordButton()
     }
     override fun onResume() { super.onResume(); refresh() }
     override fun onPause() { stopPlayback(); super.onPause() }
     override fun onDestroy() {
         try { unregisterReceiver(finished) } catch (_: Exception) {}
+        try { unregisterReceiver(transcriptUpdates) } catch (_: Exception) {}
         uiHandler.removeCallbacksAndMessages(null)
         player?.release()
         player = null
@@ -202,13 +222,8 @@ class MainActivity : Activity() {
         actionPanel.addView(progressPanel)
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
-        root.addView(TextView(this).apply {
-            text = "Seçilen konuşma kaydına dokunarak Türkçe metnini görüntüleyin ve kopyalayın."
-            textSize = 14f
-            setTextColor(0xFF40364A.toInt())
-            setPadding(4, 8, 4, 4)
-        })
-        root.addView(TextView(this).apply {
+        recordingsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        recordingsPanel.addView(TextView(this).apply {
             text = "Kayıtlar"
             textSize = 20f
             setTypeface(null, android.graphics.Typeface.BOLD)
@@ -218,7 +233,29 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this)
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(list)
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        recordingsPanel.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(recordingsPanel, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        livePanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            setPadding(8, 8, 8, 8)
+        }
+        liveTranscript = TextView(this).apply {
+            text = "Konuşma algılanıyor…"
+            textSize = 17f
+            setTextColor(0xFF242028.toInt())
+            setPadding(12, 12, 12, 12)
+            gravity = Gravity.TOP or Gravity.START
+        }
+        val liveScroll = ScrollView(this).apply { isFillViewport = true; addView(liveTranscript) }
+        livePanel.addView(liveScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        copyLiveButton = Button(this).apply {
+            text = "Tümünü Kopyala"
+            setOnClickListener { copyTranscript(liveTranscript.text.toString()) }
+        }
+        livePanel.addView(copyLiveButton, LinearLayout.LayoutParams(-1, -2))
+        root.addView(livePanel, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(TextView(this).apply {
             text = "Muhammed Yusuf OLGUN"
             textSize = 14f
@@ -238,6 +275,14 @@ class MainActivity : Activity() {
         })
         updateRecordButton()
         renderSelectedControls()
+        updateRecordingPanels()
+    }
+
+    private fun updateRecordingPanels() {
+        if (!::livePanel.isInitialized) return
+        livePanel.visibility = if (recording) android.view.View.VISIBLE else android.view.View.GONE
+        recordingsPanel.visibility = if (recording) android.view.View.GONE else android.view.View.VISIBLE
+        actionPanel.visibility = if (!recording && selectedFile?.exists() == true) android.view.View.VISIBLE else android.view.View.GONE
     }
 
     private fun controlButton(label: String, key: String, action: () -> Unit) = Button(this).apply {
@@ -258,6 +303,7 @@ class MainActivity : Activity() {
         longStopTriggered = false
         ContextCompat.startForegroundService(this, Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_START))
         updateRecordButton()
+        updateRecordingPanels()
     }
 
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
@@ -278,38 +324,53 @@ class MainActivity : Activity() {
         }
         recordButton.setBackgroundColor(color)
         recordButton.setTextColor(0xFF202020.toInt())
+        if (recording && !stopping) recordButton.setBackgroundColor(0xFFFF3B30.toInt())
     }
 
     private fun transcriptFile(audioFile: File) =
         File(audioFile.parentFile, audioFile.nameWithoutExtension + ".txt")
 
     private fun showTranscriptDialog(file: File) {
+        val dialog = Dialog(this)
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFFF8F6FC.toInt())
+        }
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(12, 8, 12, 8)
+            setBackgroundColor(0xFF000000.toInt())
+        }
+        toolbar.addView(TextView(this).apply {
+            text = file.nameWithoutExtension.replace('_', ' ')
+            textSize = 18f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(0xFFFFFFFF.toInt())
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val copyButton = Button(this).apply { text = "Tümünü Kopyala" }
+        toolbar.addView(copyButton)
+        page.addView(toolbar, LinearLayout.LayoutParams(-1, -2))
         val transcriptView = TextView(this).apply {
-            textSize = 16f
+            textSize = 17f
             setTextColor(0xFF242028.toInt())
-            setPadding(18, 14, 18, 14)
+            setPadding(18, 16, 18, 16)
             text = "Türkçe konuşma metni hazırlanıyor…"
         }
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             addView(transcriptView)
         }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Konuşma kaydı")
-            .setView(scroll)
-            .setNegativeButton("Kapat", null)
-            .setPositiveButton("Tümünü Kopyala", null)
-            .create()
+        page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        page.addView(Button(this).apply {
+            text = "Kapat"
+            setOnClickListener { dialog.dismiss() }
+        }, LinearLayout.LayoutParams(-1, -2))
+        dialog.setContentView(page)
         dialog.show()
-        val copyButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE).apply { isEnabled = false }
+        dialog.window?.setLayout(-1, -1)
         var transcript = ""
-        copyButton.setOnClickListener {
-            if (transcript.isNotBlank()) {
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("Konuşma kaydı", transcript))
-                toast("Konuşma metninin tümü kopyalandı.")
-            }
-        }
+        copyButton.setOnClickListener { copyTranscript(transcript) }
 
         val cached = transcriptFile(file)
         if (cached.isFile) {
@@ -324,6 +385,16 @@ class MainActivity : Activity() {
             transcriptView.text = result
             copyButton.isEnabled = succeeded && result.isNotBlank()
         }
+    }
+
+    private fun copyTranscript(text: String) {
+        if (text.isBlank()) {
+            toast("Kopyalanacak metin yok.")
+            return
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Konuşma metni", text))
+        toast("Metnin tümü kopyalandı.")
     }
 
     private fun transcribeToTurkish(file: File, onDone: (String, Boolean) -> Unit) {
