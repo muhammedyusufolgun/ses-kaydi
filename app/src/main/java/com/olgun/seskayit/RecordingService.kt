@@ -103,7 +103,7 @@ class RecordingService : Service() {
             stream = null
 
             if (temporary.length() > 0) {
-                val endStamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS", Locale.getDefault()).format(Date())
+                val endStamp = SimpleDateFormat("dd-MM-yyyy HH:mm", Locale.getDefault()).format(Date())
                 var destination = File(dir, "$endStamp.mp3")
                 var suffix = 1
                 while (destination.exists()) destination = File(dir, "$endStamp-$suffix.mp3").also { suffix++ }
