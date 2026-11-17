@@ -50,8 +50,6 @@ class RecordingService : Service() {
         const val ACTION_FINISHED = "com.olgun.seskayit.FINISHED"
         const val ACTION_TRANSCRIPT = "com.olgun.seskayit.TRANSCRIPT"
         const val EXTRA_TRANSCRIPT = "transcript"
-        const val ACTION_ERROR = "com.olgun.seskayit.RECORDING_ERROR"
-        const val EXTRA_ERROR = "error"
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 17
         private const val PREFS = "recording_state"
@@ -101,7 +99,6 @@ class RecordingService : Service() {
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
         if (minimum <= 0) {
-            sendBroadcast(Intent(ACTION_ERROR).setPackage(packageName).putExtra(EXTRA_ERROR, "Bu cihazın mikrofonu için kayıt biçimi başlatılamadı."))
             finishService(startId)
             return
         }
@@ -127,7 +124,6 @@ class RecordingService : Service() {
         val stopChunk = ByteArray(0)
         val transcriptionActive = AtomicBoolean(true)
         var audioSaved = false
-        var failureMessage: String? = null
 
         try {
             val audio = AudioRecord(
@@ -138,31 +134,43 @@ class RecordingService : Service() {
             recorder = audio
             if (audio.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("Mikrofon başlatılamadı")
 
-            val pipe = ParcelFileDescriptor.createPipe()
-            readSource = AudioSource.fromPfd(pipe[0], AudioSource.Mode.STREAMING)
-            val writeDescriptor = pipe[1]
-            writerThread = Thread({
-                try {
-                    ParcelFileDescriptor.AutoCloseOutputStream(writeDescriptor).use { output ->
-                        while (true) {
-                            val chunk = transcriptQueue.take()
-                            if (chunk.isEmpty()) break
-                            output.write(chunk)
-                        }
-                    }
-                } catch (_: Exception) {
-                    transcriptionActive.set(false)
-                }
-            }, "speech-audio-pipe").also { it.start() }
-
-            val source = readSource
-            recognitionJob = transcriptionScope.launch {
-                runSpeechRecognition(source)
-            }
-
             mp3Stream = FileOutputStream(temporaryAudio)
             encoder = Mp3Encoder.open(Mp3EncoderConfig(sampleRate, 1, 128), mp3Stream)
             audio.startRecording()
+
+            // Microphone-to-MP3 recording starts first. Speech setup is optional and
+            // must never cancel the audio recording if model or pipe setup fails.
+            try {
+                val pipe = ParcelFileDescriptor.createPipe()
+                try {
+                    readSource = AudioSource.fromPfd(pipe[0], AudioSource.Mode.STREAMING)
+                    val writeDescriptor = pipe[1]
+                    writerThread = Thread({
+                        try {
+                            ParcelFileDescriptor.AutoCloseOutputStream(writeDescriptor).use { output ->
+                                while (true) {
+                                    val chunk = transcriptQueue.take()
+                                    if (chunk.isEmpty()) break
+                                    output.write(chunk)
+                                }
+                            }
+                        } catch (_: Exception) {
+                            transcriptionActive.set(false)
+                        }
+                    }, "speech-audio-pipe").also { it.start() }
+
+                    val source = readSource
+                    recognitionJob = transcriptionScope.launch {
+                        runSpeechRecognition(source)
+                    }
+                } catch (_: Exception) {
+                    transcriptionActive.set(false)
+                    try { pipe[0].close() } catch (_: Exception) {}
+                    try { pipe[1].close() } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {
+                transcriptionActive.set(false)
+            }
             val pcm = ByteArray(bufferSize)
             while (running.get()) {
                 val count = audio.read(pcm, 0, pcm.size)
@@ -204,10 +212,7 @@ class RecordingService : Service() {
                     temporaryTranscript.renameTo(destinationTranscript)
                 }
             }
-        } catch (error: Exception) {
-            failureMessage = error.localizedMessage ?: "Mikrofon kaydı başlatılamadı."
-            sendBroadcast(Intent(ACTION_ERROR).setPackage(packageName).putExtra(EXTRA_ERROR, failureMessage))
-            publishTranscriptIfEmpty(failureMessage ?: "Mikrofon kaydı başlatılamadı.")
+        } catch (_: Exception) {
         } finally {
             running.set(false)
             try { capture?.stop() } catch (_: Exception) {}
