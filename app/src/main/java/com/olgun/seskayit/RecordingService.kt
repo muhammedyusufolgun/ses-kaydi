@@ -10,7 +10,9 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.Process
 import androidx.core.app.NotificationCompat
 import dev.unicornwhodev.mp3codec.Mp3Encoder
@@ -26,6 +28,7 @@ class RecordingService : Service() {
     companion object {
         const val ACTION_START = "com.olgun.seskayit.START"
         const val ACTION_STOP = "com.olgun.seskayit.STOP"
+        const val ACTION_STOP_DELAYED = "com.olgun.seskayit.STOP_DELAYED"
         const val ACTION_FINISHED = "com.olgun.seskayit.FINISHED"
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 17
@@ -33,13 +36,20 @@ class RecordingService : Service() {
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
     private var recorder: AudioRecord? = null
+    private val stopHandler = Handler(Looper.getMainLooper())
+    private val delayedStop = Runnable { requestStop() }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_DELAYED) {
+            stopHandler.removeCallbacks(delayedStop)
+            stopHandler.postDelayed(delayedStop, 1_500L)
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_STOP) {
-            running.set(false)
-            try { recorder?.stop() } catch (_: Exception) {}
+            stopHandler.removeCallbacks(delayedStop)
+            requestStop()
             return START_NOT_STICKY
         }
         if (!running.get()) {
@@ -52,6 +62,11 @@ class RecordingService : Service() {
             worker = Thread({ recordLoop(startId) }, "mp3-record").also { it.start() }
         }
         return START_NOT_STICKY
+    }
+
+    private fun requestStop() {
+        running.set(false)
+        try { recorder?.stop() } catch (_: Exception) {}
     }
 
     private fun recordLoop(startId: Int) {
