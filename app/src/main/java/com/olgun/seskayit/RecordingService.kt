@@ -83,15 +83,16 @@ class RecordingService : Service() {
         var encoder: Mp3Encoder? = null
         var successful = false
         try {
-            audio = AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
-            if (audio.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("Mikrofon başlatılamadı")
-            recorder = audio
+            val capture = AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size)
+            audio = capture
+            if (capture.state != AudioRecord.STATE_INITIALIZED) throw IllegalStateException("Mikrofon başlatılamadı")
+            recorder = capture
             stream = FileOutputStream(temporary)
             encoder = Mp3Encoder.open(Mp3EncoderConfig(rate, 1, 128), stream)
-            audio.startRecording()
+            capture.startRecording()
             val pcm = ByteArray(size)
             while (running.get()) {
-                val count = audio.read(pcm, 0, pcm.size)
+                val count = capture.read(pcm, 0, pcm.size)
                 if (count > 0) encoder.writePcm16Le(if (count == pcm.size) pcm else pcm.copyOf(count))
             }
             encoder.finish()
