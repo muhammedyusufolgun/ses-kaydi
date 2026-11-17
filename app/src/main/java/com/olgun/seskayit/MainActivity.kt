@@ -3,6 +3,8 @@ package com.olgun.seskayit
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.provider.DocumentsContract
+import android.net.Uri
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.BroadcastReceiver
@@ -46,6 +48,7 @@ class MainActivity : Activity() {
     private lateinit var selectionLabel: TextView
     private lateinit var renameButton: Button
     private lateinit var exportButton: Button
+    private lateinit var downloadsButton: Button
     private lateinit var deleteButton: Button
     private lateinit var textButton: Button
     private lateinit var transcriptPanel: LinearLayout
@@ -204,9 +207,32 @@ class MainActivity : Activity() {
             setPadding(2, 4, 2, 0)
         }
         actionPanel.addView(selectionLabel)
-        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         renameButton = controlButton("Yeniden Adlandır", "rename") { selectedFile?.let { rename(it) } }
         exportButton = controlButton("İndir", "export") { selectedFile?.let { export(it) } }
+        val downloadColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+        }
+        downloadColumn.addView(exportButton, LinearLayout.LayoutParams(-1, 34))
+        downloadsButton = Button(this).apply {
+            text = "Git"
+            textSize = 11f
+            minWidth = 0
+            minimumHeight = 28
+            setPadding(4, 0, 4, 0)
+            setBackgroundColor(0xFFE0E0E0.toInt())
+            setTextColor(0xFF303030.toInt())
+            setOnClickListener {
+                selectedAction = "downloads"
+                updateControlColors()
+                goToDownloads()
+            }
+        }
+        downloadColumn.addView(downloadsButton, LinearLayout.LayoutParams(-1, 30))
         deleteButton = controlButton("Sil", "delete") { selectedFile?.let { confirmDelete(it) } }
         textButton = controlButton("Metin", "text") {
             selectedFile?.let {
@@ -216,12 +242,12 @@ class MainActivity : Activity() {
         }
         listOf(
             renameButton to 1.55f,
-            exportButton to 0.85f,
             deleteButton to 0.70f,
             textButton to 0.85f
         ).forEach { (button, weight) ->
             buttons.addView(button, LinearLayout.LayoutParams(0, 44, weight).apply { marginEnd = 3 })
         }
+        buttons.addView(downloadColumn, LinearLayout.LayoutParams(0, 64, 0.85f).apply { marginEnd = 3 })
         actionPanel.addView(buttons)
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
@@ -550,7 +576,9 @@ class MainActivity : Activity() {
         }
         files.forEachIndexed { index, file ->
             val row = TextView(this).apply {
-                text = (index + 1).toString() + ".  " + file.nameWithoutExtension.replace('_', ' ') + "  (" + recordingDuration(file) + ")"
+                val baseName = file.nameWithoutExtension.replace('_', ' ')
+                val nameHasDuration = Regex("\\(\\d+:\\d+\\)$").containsMatchIn(file.nameWithoutExtension)
+                text = (index + 1).toString() + ".  " + baseName + if (nameHasDuration) "" else "  (" + recordingDuration(file) + ")"
                 textSize = 15f
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setTextColor(0xFF302638.toInt())
@@ -581,7 +609,7 @@ class MainActivity : Activity() {
 
     private fun updateControlColors() {
         if (!::actionPanel.isInitialized) return
-        listOf("rename" to renameButton, "export" to exportButton, "delete" to deleteButton, "text" to textButton).forEach { (key, button) ->
+        listOf("rename" to renameButton, "export" to exportButton, "downloads" to downloadsButton, "delete" to deleteButton, "text" to textButton).forEach { (key, button) ->
             button.setBackgroundColor(if (selectedAction == key) 0xFF777777.toInt() else 0xFFE0E0E0.toInt())
             button.setTextColor(if (selectedAction == key) 0xFFFFFFFF.toInt() else 0xFF303030.toInt())
         }
@@ -622,6 +650,24 @@ class MainActivity : Activity() {
                         refresh()
                     }.show()
             }.show()
+    }
+
+    private fun goToDownloads() {
+        try {
+            startActivity(Intent("android.intent.action.VIEW_DOWNLOADS"))
+        } catch (_: Exception) {
+            try {
+                val initialDownloads = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    if (Build.VERSION.SDK_INT >= 26) putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialDownloads)
+                }
+                startActivity(intent)
+            } catch (_: Exception) {
+                // Keep the recording screen usable if no file browser is installed.
+            }
+        }
     }
 
     private fun export(file: File) {
