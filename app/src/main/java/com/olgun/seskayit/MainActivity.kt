@@ -313,9 +313,24 @@ class MainActivity : Activity() {
         recording = true
         stopping = false
         longStopTriggered = false
-        ContextCompat.startForegroundService(this, Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_START))
         updateRecordButton()
         updateRecordingPanels()
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_START))
+            uiHandler.postDelayed({
+                if (recording && !RecordingService.serviceRunning) {
+                    recording = false
+                    updateRecordButton()
+                    updateRecordingPanels()
+                    toast("Kayıt servisi başlayamadı. Mikrofon iznini ve uygulama ayarlarını kontrol edin.")
+                }
+            }, 2_000L)
+        } catch (error: Exception) {
+            recording = false
+            updateRecordButton()
+            updateRecordingPanels()
+            toast("Kayıt başlatılamadı: " + (error.localizedMessage ?: "Mikrofon iznini kontrol edin."))
+        }
     }
 
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, grants: IntArray) {
