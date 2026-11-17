@@ -23,7 +23,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
-import com.google.mlkit.genai.speechrecognition.AudioSource
+import com.google.mlkit.genai.common.audio.AudioSource
 import com.google.mlkit.genai.speechrecognition.SpeechRecognition
 import com.google.mlkit.genai.speechrecognition.SpeechRecognizerOptions
 import com.google.mlkit.genai.speechrecognition.SpeechRecognizerResponse
@@ -346,7 +346,7 @@ class MainActivity : Activity() {
                     FeatureStatus.DOWNLOADABLE -> {
                         var ready = false
                         var failed = false
-                        activeRecognizer.download.collect { status ->
+                        activeRecognizer.download().collect { status ->
                             when (status) {
                                 is DownloadStatus.DownloadCompleted -> ready = true
                                 is DownloadStatus.DownloadFailed -> failed = true
