@@ -433,7 +433,7 @@ class MainActivity : Activity() {
                 val source = AudioSource.fromFile(file)
                 audioSource = source
                 val request = com.google.mlkit.genai.speechrecognition.speechRecognizerRequest {
-                    audioSource = source
+                    this.audioSource = source
                 }
                 val parts = mutableListOf<String>()
                 var recognitionError: String? = null
