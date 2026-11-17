@@ -388,7 +388,7 @@ class MainActivity : Activity() {
                 encoder = null
                 output.close()
                 output = null
-                val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS", Locale.getDefault()).format(Date())
+                val stamp = SimpleDateFormat("dd-MM-yyyy HH:mm", Locale.getDefault()).format(Date())
                 var destination = File(dir, "$stamp.mp3")
                 var suffix = 1
                 while (destination.exists()) destination = File(dir, "$stamp-$suffix.mp3").also { suffix++ }
