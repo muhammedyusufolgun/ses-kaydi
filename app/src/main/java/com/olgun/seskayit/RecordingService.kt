@@ -56,6 +56,8 @@ class RecordingService : Service() {
         private const val PREF_RECORDING = "active"
         private const val PREF_TRANSCRIPT = "live_transcript"
         private const val PREF_TRANSCRIPT_PATH = "live_transcript_path"
+        @Volatile var serviceRunning: Boolean = false
+            private set
     }
 
     private val running = AtomicBoolean(false)
@@ -79,6 +81,7 @@ class RecordingService : Service() {
                 startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
             } else startForeground(NOTIFICATION_ID, notification)
             running.set(true)
+            serviceRunning = true
             worker = Thread({ recordLoop(startId) }, "audio-and-transcript").also { it.start() }
         }
         return START_NOT_STICKY
@@ -298,6 +301,7 @@ class RecordingService : Service() {
 
     private fun finishService(startId: Int) {
         running.set(false)
+        serviceRunning = false
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         prefs.edit().putBoolean(PREF_RECORDING, false).apply()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -306,6 +310,8 @@ class RecordingService : Service() {
     }
 
     override fun onDestroy() {
+        running.set(false)
+        serviceRunning = false
         transcriptionScope.cancel()
         super.onDestroy()
     }
