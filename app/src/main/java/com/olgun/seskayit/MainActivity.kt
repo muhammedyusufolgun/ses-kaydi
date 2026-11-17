@@ -3,7 +3,6 @@ package com.olgun.seskayit
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.BroadcastReceiver
@@ -12,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -49,6 +49,12 @@ class MainActivity : Activity() {
     private lateinit var renameButton: Button
     private lateinit var exportButton: Button
     private lateinit var deleteButton: Button
+    private lateinit var textButton: Button
+    private lateinit var transcriptPanel: LinearLayout
+    private lateinit var transcriptTextView: TextView
+    private lateinit var transcriptCopyButton: Button
+    private var displayedTranscriptFile: File? = null
+    private val durationCache = mutableMapOf<String, String>()
     private lateinit var progressPanel: LinearLayout
     private lateinit var progressBar: SeekBar
     private lateinit var progressLabel: TextView
@@ -214,7 +220,8 @@ class MainActivity : Activity() {
         renameButton = controlButton("Ad", "rename") { selectedFile?.let { rename(it) } }
         exportButton = controlButton("İndir", "export") { selectedFile?.let { export(it) } }
         deleteButton = controlButton("Sil", "delete") { selectedFile?.let { confirmDelete(it) } }
-        listOf(playButton, renameButton, exportButton, deleteButton).forEach { button ->
+        textButton = controlButton("Metin", "text") { selectedFile?.let { showTranscriptPanel(it) } }
+        listOf(playButton, renameButton, exportButton, deleteButton, textButton).forEach { button ->
             buttons.addView(button, LinearLayout.LayoutParams(0, 44, 1f).apply { marginEnd = 3 })
         }
         actionPanel.addView(buttons)
@@ -233,6 +240,59 @@ class MainActivity : Activity() {
         progressPanel.addView(progressLabel)
         actionPanel.addView(progressPanel)
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
+
+        transcriptPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            setPadding(6, 4, 6, 4)
+            setBackgroundColor(0xFFFFFFFF.toInt())
+        }
+        val transcriptToolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val transcriptHeading = TextView(this).apply {
+            text = "Metin"
+            textSize = 17f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(0xFF302638.toInt())
+        }
+        transcriptToolbar.addView(transcriptHeading, LinearLayout.LayoutParams(0, -2, 1f))
+        transcriptCopyButton = Button(this).apply {
+            text = "Kopyala"
+            textSize = 11f
+            minWidth = 0
+            minimumHeight = 32
+            setPadding(8, 0, 8, 0)
+            setBackgroundColor(0xFFFFFFFF.toInt())
+            setTextColor(0xFF202020.toInt())
+        }
+        transcriptToolbar.addView(transcriptCopyButton, LinearLayout.LayoutParams(-2, 34))
+        val closeTranscriptButton = Button(this).apply {
+            text = "X"
+            textSize = 16f
+            minWidth = 0
+            minimumHeight = 36
+            setPadding(8, 0, 8, 0)
+            setBackgroundColor(0xFFE53935.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
+            setOnClickListener { closeTranscriptPanel() }
+        }
+        transcriptToolbar.addView(closeTranscriptButton, LinearLayout.LayoutParams(44, 36).apply { marginStart = 6 })
+        transcriptPanel.addView(transcriptToolbar, LinearLayout.LayoutParams(-1, -2))
+        transcriptTextView = TextView(this).apply {
+            textSize = 16f
+            setTextColor(0xFF242028.toInt())
+            setPadding(10, 10, 10, 10)
+            gravity = Gravity.TOP or Gravity.START
+        }
+        val transcriptScroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(transcriptTextView)
+        }
+        transcriptPanel.addView(transcriptScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        setCopyOnTouch(transcriptCopyButton) { transcriptTextView.text.toString() }
+        root.addView(transcriptPanel, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = 32 })
 
         recordingsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         recordingsPanel.addView(TextView(this).apply {
@@ -267,7 +327,7 @@ class MainActivity : Activity() {
             setBackgroundColor(0xFFFFFFFF.toInt())
             setTextColor(0xFF202020.toInt())
         }
-        setCopyHold(copyLiveButton) { liveTranscript.text.toString() }
+        setCopyOnTouch(copyLiveButton) { liveTranscript.text.toString() }
         livePanel.addView(copyLiveButton, LinearLayout.LayoutParams(-1, -2))
         root.addView(livePanel, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(TextView(this).apply {
@@ -294,8 +354,10 @@ class MainActivity : Activity() {
 
     private fun updateRecordingPanels() {
         if (!::livePanel.isInitialized) return
+        if (recording && ::transcriptPanel.isInitialized) transcriptPanel.visibility = android.view.View.GONE
         livePanel.visibility = if (recording) android.view.View.VISIBLE else android.view.View.GONE
-        recordingsPanel.visibility = if (recording) android.view.View.GONE else android.view.View.VISIBLE
+        val showingTranscript = ::transcriptPanel.isInitialized && transcriptPanel.visibility == android.view.View.VISIBLE
+        recordingsPanel.visibility = if (recording || showingTranscript) android.view.View.GONE else android.view.View.VISIBLE
         actionPanel.visibility = if (!recording && selectedFile?.exists() == true) android.view.View.VISIBLE else android.view.View.GONE
     }
 
@@ -358,88 +420,52 @@ class MainActivity : Activity() {
     private fun transcriptFile(audioFile: File) =
         File(audioFile.parentFile, audioFile.nameWithoutExtension + ".txt")
 
-    private fun showTranscriptDialog(file: File) {
-        val dialog = Dialog(this)
-        val page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFFF8F6FC.toInt())
-        }
-        val toolbar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(12, 8, 12, 8)
-            setBackgroundColor(0xFF000000.toInt())
-        }
-        toolbar.addView(TextView(this).apply {
-            text = file.nameWithoutExtension.replace('_', ' ')
-            textSize = 18f
-            setTypeface(null, android.graphics.Typeface.BOLD)
-            setTextColor(0xFFFFFFFF.toInt())
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        val copyButton = Button(this).apply {
-            text = "Tümünü Kopyala"
-            setBackgroundColor(0xFFFFFFFF.toInt())
-            setTextColor(0xFF202020.toInt())
-        }
-        toolbar.addView(copyButton)
-        page.addView(toolbar, LinearLayout.LayoutParams(-1, -2))
-        val transcriptView = TextView(this).apply {
-            textSize = 17f
-            setTextColor(0xFF242028.toInt())
-            setPadding(18, 16, 18, 16)
-            text = "Türkçe konuşma metni hazırlanıyor…"
-        }
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            addView(transcriptView)
-        }
-        page.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        page.addView(Button(this).apply {
-            text = "Kapat"
-            setOnClickListener { dialog.dismiss() }
-        }, LinearLayout.LayoutParams(-1, -2))
-        dialog.setContentView(page)
-        dialog.show()
-        dialog.window?.setLayout(-1, -1)
-        var transcript = ""
-        setCopyHold(copyButton) { transcript }
-
+    private fun showTranscriptPanel(file: File) {
+        if (!file.exists()) return
+        displayedTranscriptFile = file
+        transcriptPanel.visibility = android.view.View.VISIBLE
+        recordingsPanel.visibility = android.view.View.GONE
+        transcriptTextView.text = "Metin hazırlanıyor…"
         val cached = transcriptFile(file)
-        if (cached.isFile) {
-            transcript = runCatching { cached.readText() }.getOrDefault("")
-            if (transcript.isNotBlank() && !transcript.contains("ERROR_TYPE_") && !transcript.contains("Speech recognition engine", true)) {
-                transcriptView.text = transcript
-                return
-            }
-            cached.delete()
-            transcript = ""
+        val cachedText = if (cached.isFile) runCatching { cached.readText() }.getOrDefault("") else ""
+        if (cachedText.isNotBlank() && !cachedText.contains("ERROR_TYPE_") &&
+            !cachedText.contains("Speech recognition engine", true)) {
+            transcriptTextView.text = cachedText
+            return
         }
+        if (cached.isFile) cached.delete()
         transcribeToTurkish(file) { result, succeeded ->
-            if (!dialog.isShowing) return@transcribeToTurkish
-            transcript = if (succeeded) result else ""
-            transcriptView.text = if (succeeded && result.isNotBlank()) result else "Bu kayıtta konuşma algılanamadı."
+            if (displayedTranscriptFile != file || transcriptPanel.visibility != android.view.View.VISIBLE) return@transcribeToTurkish
+            transcriptTextView.text = if (succeeded && result.isNotBlank()) result else "Bu kayıtta konuşma algılanamadı."
+            transcriptScrollToTop()
         }
     }
 
-    private fun setCopyHold(button: Button, textProvider: () -> String) {
-        val copyAfterHold = Runnable {
-            if (button.isPressed && copyTranscript(textProvider())) {
-                button.performHapticFeedback(
-                    if (Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM
-                    else android.view.HapticFeedbackConstants.LONG_PRESS
-                )
-            }
-        }
+    private fun closeTranscriptPanel() {
+        if (!::transcriptPanel.isInitialized) return
+        transcriptPanel.visibility = android.view.View.GONE
+        displayedTranscriptFile = null
+        if (!recording) recordingsPanel.visibility = android.view.View.VISIBLE
+    }
+
+    private fun transcriptScrollToTop() {
+        transcriptTextView.parent?.let { (it as? ScrollView)?.scrollTo(0, 0) }
+    }
+
+    private fun setCopyOnTouch(button: Button, textProvider: () -> String) {
         button.setOnTouchListener { view, event ->
             when (event.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
+                MotionEvent.ACTION_DOWN -> {
                     view.isPressed = true
-                    uiHandler.removeCallbacks(copyAfterHold)
-                    uiHandler.postDelayed(copyAfterHold, 1_000L)
+                    if (copyTranscript(textProvider())) {
+                        view.performHapticFeedback(
+                            if (Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM
+                            else android.view.HapticFeedbackConstants.LONG_PRESS
+                        )
+                    }
                     true
                 }
-                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                    uiHandler.removeCallbacks(copyAfterHold)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     view.isPressed = false
                     true
                 }
@@ -453,6 +479,26 @@ class MainActivity : Activity() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Konuşma metni", text))
         return true
+    }
+
+    private fun recordingDuration(file: File): String {
+        return durationCache.getOrPut(file.absolutePath) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(file.absolutePath)
+                val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                val totalSeconds = (durationMs / 1000L).coerceAtLeast(0L)
+                val hours = totalSeconds / 3600
+                val minutes = (totalSeconds % 3600) / 60
+                val seconds = totalSeconds % 60
+                if (hours > 0) String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+                else String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+            } catch (_: Exception) {
+                "00:00"
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+            }
+        }
     }
 
     private fun transcribeToTurkish(file: File, onDone: (String, Boolean) -> Unit) {
@@ -532,7 +578,7 @@ class MainActivity : Activity() {
         }
         files.forEachIndexed { index, file ->
             val row = TextView(this).apply {
-                text = (index + 1).toString() + ".  " + file.nameWithoutExtension.replace('_', ' ')
+                text = (index + 1).toString() + ".  " + file.nameWithoutExtension.replace('_', ' ') + "   ·   " + recordingDuration(file)
                 textSize = 15f
                 setTypeface(null, android.graphics.Typeface.BOLD)
                 setTextColor(0xFF302638.toInt())
@@ -540,10 +586,10 @@ class MainActivity : Activity() {
                 setBackgroundColor(if (selectedFile == file) 0xFFD0D0D0.toInt() else 0xFFFFFFFF.toInt())
                 isClickable = true
                 setOnClickListener {
+                    closeTranscriptPanel()
                     selectedFile = file
                     selectedAction = null
                     refresh()
-                    showTranscriptDialog(file)
                 }
             }
             row.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 5 }
@@ -565,7 +611,7 @@ class MainActivity : Activity() {
 
     private fun updateControlColors() {
         if (!::actionPanel.isInitialized) return
-        listOf("play" to playButton, "rename" to renameButton, "export" to exportButton, "delete" to deleteButton).forEach { (key, button) ->
+        listOf("play" to playButton, "rename" to renameButton, "export" to exportButton, "delete" to deleteButton, "text" to textButton).forEach { (key, button) ->
             button.setBackgroundColor(if (selectedAction == key) 0xFF777777.toInt() else 0xFFE0E0E0.toInt())
             button.setTextColor(if (selectedAction == key) 0xFFFFFFFF.toInt() else 0xFF303030.toInt())
         }
@@ -628,6 +674,7 @@ class MainActivity : Activity() {
                     val target = File(file.parentFile, "$base.mp3")
                     if (target.exists()) toast("Bu ad zaten kullanılıyor.")
                     else if (file.renameTo(target)) {
+                        closeTranscriptPanel()
                         val oldTranscript = transcriptFile(file)
                         if (oldTranscript.exists()) oldTranscript.renameTo(transcriptFile(target))
                         selectedFile = target
@@ -646,6 +693,7 @@ class MainActivity : Activity() {
                     .setNegativeButton("Vazgeç", null)
                     .setPositiveButton("Kalıcı sil") { _, _ ->
                         if (playingFile == file) stopPlayback()
+                        closeTranscriptPanel()
                         file.delete()
                         transcriptFile(file).delete()
                         selectedFile = null
