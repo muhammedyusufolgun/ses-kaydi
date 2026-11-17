@@ -160,8 +160,24 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(0xFFFFFFFF.toInt())
             setTypeface(null, android.graphics.Typeface.BOLD)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                closeTranscriptPanel()
+                selectedAction = null
+                updateControlColors()
+                if (recording) {
+                    livePanel.visibility = android.view.View.GONE
+                    recordingsPanel.visibility = android.view.View.VISIBLE
+                    actionPanel.visibility = android.view.View.GONE
+                } else {
+                    updateRecordingPanels()
+                    recordingsPanel.visibility = android.view.View.VISIBLE
+                }
+            }
         }, android.widget.FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
         root.addView(header)
+        root.addView(android.view.View(this), LinearLayout.LayoutParams(1, 16))
 
         recordButton = Button(this)
         recordButton.setOnClickListener {
@@ -199,6 +215,16 @@ class MainActivity : Activity() {
                 if (transcriptPanel.visibility == android.view.View.VISIBLE && displayedTranscriptFile == it) closeTranscriptPanel()
                 else showTranscriptPanel(it)
             }
+        }
+        renameButton.setOnClickListener {
+            selectedAction = "rename"
+            updateControlColors()
+            val file = selectedFile
+            if (transcriptPanel.visibility == android.view.View.VISIBLE) {
+                closeTranscriptPanel()
+                selectedAction = "rename"
+                updateControlColors()
+            } else file?.let { rename(it) }
         }
         exportButton = controlButton("İndir", "export") { selectedFile?.let { export(it) } }
         downloadsButton = Button(this).apply {
@@ -344,6 +370,7 @@ class MainActivity : Activity() {
             return
         }
         blockRestoreUntilStart = false
+        liveTranscript.text = ""
         recording = true
         stopping = false
         longStopTriggered = false
@@ -416,6 +443,8 @@ class MainActivity : Activity() {
         transcriptPanel.visibility = android.view.View.GONE
         displayedTranscriptFile = null
         if (!recording) recordingsPanel.visibility = android.view.View.VISIBLE
+        selectedAction = null
+        updateControlColors()
     }
 
     private fun transcriptScrollToTop() {
@@ -586,9 +615,16 @@ class MainActivity : Activity() {
 
     private fun updateControlColors() {
         if (!::actionPanel.isInitialized) return
+        val colors = mapOf(
+            "rename" to 0xFF90CAF9.toInt(),
+            "export" to 0xFFFFCC80.toInt(),
+            "downloads" to 0xFFFFF59D.toInt(),
+            "delete" to 0xFFEF9A9A.toInt(),
+            "text" to 0xFF90CAF9.toInt()
+        )
         listOf("rename" to renameButton, "export" to exportButton, "downloads" to downloadsButton, "delete" to deleteButton, "text" to textButton).forEach { (key, button) ->
-            button.setBackgroundColor(if (selectedAction == key) 0xFF777777.toInt() else 0xFFE0E0E0.toInt())
-            button.setTextColor(if (selectedAction == key) 0xFFFFFFFF.toInt() else 0xFF303030.toInt())
+            button.setBackgroundColor(if (selectedAction == key) colors.getValue(key) else 0xFFE0E0E0.toInt())
+            button.setTextColor(0xFF303030.toInt())
         }
     }
 
