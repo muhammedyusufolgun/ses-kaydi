@@ -38,7 +38,6 @@ class MainActivity : Activity() {
     private var recording = false
     private var stopping = false
     private var longStopTriggered = false
-    private var recentlyStopped = false
     private var selectedFile: File? = null
     private var selectedAction: String? = null
     private var player: MediaPlayer? = null
@@ -67,7 +66,6 @@ class MainActivity : Activity() {
             recording = false
             stopping = false
             longStopTriggered = false
-            recentlyStopped = true
             updateRecordButton()
             uiHandler.postDelayed({
                 refresh()
@@ -235,7 +233,6 @@ class MainActivity : Activity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 20)
             return
         }
-        recentlyStopped = false
         recording = true
         stopping = false
         longStopTriggered = false
@@ -253,12 +250,10 @@ class MainActivity : Activity() {
         recordButton.text = when {
             stopping -> "Kaydı Durdur"
             recording -> "Kayıt sürüyor · durdurmak için 2 sn basılı tut"
-            recentlyStopped -> "Kayıt durdu"
             else -> "Kaydı Başlat"
         }
         val color = when {
             stopping -> 0xFFFFA726.toInt()
-            recentlyStopped -> 0xFFE57373.toInt()
             else -> 0xFF55B85A.toInt()
         }
         recordButton.setBackgroundColor(color)
