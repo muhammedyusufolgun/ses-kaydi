@@ -3,34 +3,41 @@ package com.olgun.seskayit
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaFormat
-import android.net.Uri
-import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import dev.unicornwhodev.mp3codec.Mp3Encoder
-import dev.unicornwhodev.mp3codec.Mp3EncoderConfig
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
 import android.widget.*
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.mlkit.genai.common.DownloadStatus
+import com.google.mlkit.genai.common.FeatureStatus
+import com.google.mlkit.genai.speechrecognition.AudioSource
+import com.google.mlkit.genai.speechrecognition.SpeechRecognition
+import com.google.mlkit.genai.speechrecognition.SpeechRecognizerOptions
+import com.google.mlkit.genai.speechrecognition.SpeechRecognizerResponse
+import com.google.mlkit.genai.speechrecognition.speechRecognizerOptions
+import com.google.mlkit.genai.speechrecognition.speechRecognizerRequest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Locale
 
 class MainActivity : Activity() {
     private lateinit var list: LinearLayout
@@ -53,6 +60,7 @@ class MainActivity : Activity() {
     private var player: MediaPlayer? = null
     private var playingFile: File? = null
     private var exportFile: File? = null
+    private val transcriptionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val uiHandler = Handler(Looper.getMainLooper())
 
     private val progressTicker = object : Runnable {
@@ -99,6 +107,7 @@ class MainActivity : Activity() {
         uiHandler.removeCallbacksAndMessages(null)
         player?.release()
         player = null
+        transcriptionScope.cancel()
         super.onDestroy()
     }
 
@@ -156,16 +165,6 @@ class MainActivity : Activity() {
         }
         root.addView(recordButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8 })
 
-        val builtInCallButton = Button(this).apply {
-            text = "Yerleşik çağrı kaydı"
-            setOnClickListener { openBuiltInCallRecorder() }
-        }
-        root.addView(builtInCallButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 6 })
-        val importCallButton = Button(this).apply {
-            text = "Telefon kaydını içe aktar"
-            setOnClickListener { chooseBuiltInRecording() }
-        }
-        root.addView(importCallButton, LinearLayout.LayoutParams(-1, -2))
 
         actionPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -204,7 +203,7 @@ class MainActivity : Activity() {
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
         root.addView(TextView(this).apply {
-            text = "Çağrı kaydı Samsung Telefon uygulamasında yapılır. Görüşme bitince kaydı buraya aktarabilirsiniz."
+            text = "Seçilen konuşma kaydına dokunarak Türkçe metnini görüntüleyin ve kopyalayın."
             textSize = 14f
             setTextColor(0xFF40364A.toInt())
             setPadding(4, 8, 4, 4)
@@ -281,135 +280,112 @@ class MainActivity : Activity() {
         recordButton.setTextColor(0xFF202020.toInt())
     }
 
-    private fun openBuiltInCallRecorder() {
-        AlertDialog.Builder(this)
-            .setTitle("Cihazın çağrı kaydı")
-            .setMessage("Telefonu açın ve aramayı Samsung Telefon uygulamasından yapın. Görüşme ekranında Kaydet düğmesine dokunun veya Telefon > ⋮ > Ayarlar bölümünde Aramaları kaydet seçeneğini etkinleştirin. Seçenek cihazınızda görünmüyorsa bölge/yazılım sürümü bu özelliği sunmuyor olabilir. Görüşme bittikten sonra bu uygulamaya dönüp kaydı içe aktarın.")
-            .setNegativeButton("Kapat", null)
-            .setPositiveButton("Telefonu aç") { _, _ ->
-                try { startActivity(Intent(Intent.ACTION_DIAL)) }
-                catch (_: Exception) { toast("Telefon uygulaması açılamadı.") }
-            }.show()
-    }
+    private fun transcriptFile(audioFile: File) =
+        File(audioFile.parentFile, audioFile.nameWithoutExtension + ".txt")
 
-    private fun chooseBuiltInRecording() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "audio/*"
+    private fun showTranscriptDialog(file: File) {
+        val transcriptView = TextView(this).apply {
+            textSize = 16f
+            setTextColor(0xFF242028.toInt())
+            setPadding(18, 14, 18, 14)
+            text = "Türkçe konuşma metni hazırlanıyor…"
         }
-        startActivityForResult(intent, 31)
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(transcriptView)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Konuşma kaydı")
+            .setView(scroll)
+            .setNegativeButton("Kapat", null)
+            .setPositiveButton("Tümünü Kopyala", null)
+            .create()
+        dialog.show()
+        val copyButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE).apply { isEnabled = false }
+        var transcript = ""
+        copyButton.setOnClickListener {
+            if (transcript.isNotBlank()) {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Konuşma kaydı", transcript))
+                toast("Konuşma metninin tümü kopyalandı.")
+            }
+        }
+
+        val cached = transcriptFile(file)
+        if (cached.isFile) {
+            transcript = runCatching { cached.readText() }.getOrDefault("")
+            transcriptView.text = transcript.ifBlank { "Bu kayıt için metin bulunamadı." }
+            copyButton.isEnabled = transcript.isNotBlank()
+            return
+        }
+        transcribeToTurkish(file) { result ->
+            if (!dialog.isShowing) return@transcribeToTurkish
+            transcript = result
+            transcriptView.text = result.ifBlank { "Konuşmada çözümlenebilir Türkçe ses bulunamadı." }
+            copyButton.isEnabled = result.isNotBlank()
+        }
     }
 
-    private fun importBuiltInRecording(uri: Uri) {
-        Thread {
-            val dir = recordingsDir()
-            val temp = File(dir, ".import-${System.currentTimeMillis()}.part")
-            var extractor: MediaExtractor? = null
-            var decoder: MediaCodec? = null
-            var output: FileOutputStream? = null
-            var encoder: Mp3Encoder? = null
-            var success = false
+    private fun transcribeToTurkish(file: File, onDone: (String) -> Unit) {
+        if (Build.VERSION.SDK_INT < 31) {
+            onDone("Türkçe ses çözümleme bu Android sürümünde desteklenmiyor.")
+            return
+        }
+        transcriptionScope.launch {
+            var recognizer: com.google.mlkit.genai.speechrecognition.SpeechRecognizer? = null
+            var audioSource: AudioSource? = null
             try {
-                extractor = MediaExtractor()
-                extractor.setDataSource(this, uri, null)
-                var audioTrack = -1
-                var inputFormat: MediaFormat? = null
-                for (i in 0 until extractor.trackCount) {
-                    val candidate = extractor.getTrackFormat(i)
-                    if (candidate.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
-                        audioTrack = i
-                        inputFormat = candidate
-                        break
-                    }
+                val options = speechRecognizerOptions {
+                    locale = Locale.forLanguageTag("tr-TR")
+                    preferredMode = SpeechRecognizerOptions.Mode.MODE_BASIC
                 }
-                if (audioTrack < 0 || inputFormat == null) throw IllegalArgumentException("Ses akışı bulunamadı")
-                extractor.selectTrack(audioTrack)
-                val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: throw IllegalArgumentException("Ses biçimi tanınmadı")
-                decoder = MediaCodec.createDecoderByType(mime)
-                decoder.configure(inputFormat, null, null, 0)
-                decoder.start()
-                output = FileOutputStream(temp)
+                recognizer = SpeechRecognition.getClient(options)
+                when (recognizer.checkStatus()) {
+                    FeatureStatus.AVAILABLE -> Unit
+                    FeatureStatus.DOWNLOADABLE -> {
+                        var ready = false
+                        var failed = false
+                        recognizer.download.collect { status ->
+                            when (status) {
+                                is DownloadStatus.DownloadCompleted -> ready = true
+                                is DownloadStatus.DownloadFailed -> failed = true
+                                else -> Unit
+                            }
+                        }
+                        if (!ready || failed) throw IllegalStateException("Türkçe ses modeli indirilemedi.")
+                    }
+                    FeatureStatus.DOWNLOADING -> throw IllegalStateException("Türkçe ses modeli indiriliyor. Biraz sonra yeniden deneyin.")
+                    else -> throw IllegalStateException("Bu cihazda Türkçe ses modeli kullanılamıyor.")
+                }
 
-                var inputDone = false
-                var outputDone = false
-                val info = MediaCodec.BufferInfo()
-                while (!outputDone) {
-                    if (!inputDone) {
-                        val inputIndex = decoder.dequeueInputBuffer(10_000)
-                        if (inputIndex >= 0) {
-                            val inputBuffer = decoder.getInputBuffer(inputIndex)!!
-                            inputBuffer.clear()
-                            val sampleSize = extractor.readSampleData(inputBuffer, 0)
-                            if (sampleSize < 0) {
-                                decoder.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                inputDone = true
-                            } else {
-                                decoder.queueInputBuffer(inputIndex, 0, sampleSize, extractor.sampleTime, 0)
-                                extractor.advance()
-                            }
+                audioSource = AudioSource.fromFile(file)
+                val request = com.google.mlkit.genai.speechrecognition.speechRecognizerRequest {
+                    this.audioSource = audioSource
+                }
+                val parts = mutableListOf<String>()
+                var recognitionError: String? = null
+                recognizer.startRecognition(request).collect { response ->
+                    when (response) {
+                        is SpeechRecognizerResponse.FinalTextResponse -> {
+                            response.text.trim().takeIf { it.isNotEmpty() }?.let(parts::add)
                         }
-                    }
-                    val outputIndex = decoder.dequeueOutputBuffer(info, 10_000)
-                    when {
-                        outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                            val decodedFormat = decoder.outputFormat
-                            val sampleRate = decodedFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                            val channels = decodedFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceIn(1, 2)
-                            encoder = Mp3Encoder.open(Mp3EncoderConfig(sampleRate, channels, 128), output)
+                        is SpeechRecognizerResponse.ErrorResponse -> {
+                            recognitionError = response.e.message
                         }
-                        outputIndex >= 0 -> {
-                            if (info.size > 0) {
-                                val buffer = decoder.getOutputBuffer(outputIndex)!!
-                                buffer.position(info.offset)
-                                buffer.limit(info.offset + info.size)
-                                val pcm = ByteArray(info.size)
-                                buffer.get(pcm)
-                                val activeEncoder = encoder ?: run {
-                                    val decodedFormat = decoder.outputFormat
-                                    Mp3Encoder.open(
-                                        Mp3EncoderConfig(
-                                            decodedFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE),
-                                            decodedFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceIn(1, 2),
-                                            128
-                                        ), output
-                                    ).also { encoder = it }
-                                }
-                                activeEncoder.writePcm16Le(pcm)
-                            }
-                            outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                            decoder.releaseOutputBuffer(outputIndex, false)
-                        }
+                        else -> Unit
                     }
                 }
-                val activeEncoder = encoder ?: throw IllegalStateException("MP3 dönüştürücü başlatılamadı")
-                activeEncoder.finish()
-                output.flush()
-                activeEncoder.close()
-                encoder = null
-                output.close()
-                output = null
-                val stamp = SimpleDateFormat("dd-MM-yyyy HH:mm", Locale.getDefault()).format(Date())
-                var destination = File(dir, "$stamp.mp3")
-                var suffix = 1
-                while (destination.exists()) destination = File(dir, "$stamp-$suffix.mp3").also { suffix++ }
-                success = temp.renameTo(destination)
-            } catch (_: Exception) {
-                temp.delete()
+                val result = parts.joinToString("\n\n").trim()
+                if (result.isBlank()) throw IllegalStateException(recognitionError ?: "Konuşma metne çevrilemedi.")
+                transcriptFile(file).writeText(result)
+                onDone(result)
+            } catch (error: Exception) {
+                onDone(error.message ?: "Konuşma metne çevrilemedi.")
             } finally {
-                try { encoder?.close() } catch (_: Exception) {}
-                try { output?.close() } catch (_: Exception) {}
-                try { decoder?.stop() } catch (_: Exception) {}
-                try { decoder?.release() } catch (_: Exception) {}
-                try { extractor?.release() } catch (_: Exception) {}
-                if (!success) temp.delete()
-                runOnUiThread {
-                    if (success) {
-                        refresh()
-                        toast("Yerleşik çağrı kaydı MP3 olarak eklendi.")
-                    } else toast("Çağrı kaydı içe aktarılamadı.")
-                }
+                try { audioSource?.close() } catch (_: Exception) {}
+                try { recognizer?.close() } catch (_: Exception) {}
             }
-        }.start()
+        }
     }
 
     private fun recordingsDir() = File(getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Ses-kayit").apply { mkdirs() }
@@ -436,9 +412,10 @@ class MainActivity : Activity() {
                 setBackgroundColor(if (selectedFile == file) 0xFFD0D0D0.toInt() else 0xFFFFFFFF.toInt())
                 isClickable = true
                 setOnClickListener {
-                    selectedFile = if (selectedFile == file) null else file
+                    selectedFile = file
                     selectedAction = null
                     refresh()
+                    showTranscriptDialog(file)
                 }
             }
             row.layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 5 }
@@ -522,7 +499,12 @@ class MainActivity : Activity() {
                 if (base.isNotBlank()) {
                     val target = File(file.parentFile, "$base.mp3")
                     if (target.exists()) toast("Bu ad zaten kullanılıyor.")
-                    else if (file.renameTo(target)) { selectedFile = target; refresh() }
+                    else if (file.renameTo(target)) {
+                        val oldTranscript = transcriptFile(file)
+                        if (oldTranscript.exists()) oldTranscript.renameTo(transcriptFile(target))
+                        selectedFile = target
+                        refresh()
+                    }
                 }
             }.show()
     }
@@ -537,6 +519,7 @@ class MainActivity : Activity() {
                     .setPositiveButton("Kalıcı sil") { _, _ ->
                         if (playingFile == file) stopPlayback()
                         file.delete()
+                        transcriptFile(file).delete()
                         selectedFile = null
                         selectedAction = null
                         refresh()
@@ -562,8 +545,6 @@ class MainActivity : Activity() {
                 contentResolver.openOutputStream(data.data!!)?.use { output -> exportFile!!.inputStream().use { it.copyTo(output) } }
                 toast("MP3 dışa aktarıldı.")
             } catch (_: Exception) { toast("Dışa aktarma başarısız oldu.") }
-        } else if (requestCode == 31 && resultCode == RESULT_OK && data?.data != null) {
-            importBuiltInRecording(data.data!!)
         }
     }
 
