@@ -128,7 +128,7 @@ class MainActivity : Activity() {
                         stopping = true
                         longStopTriggered = false
                         updateRecordButton()
-                        uiHandler.postDelayed(stopAfterHold, 2_000L)
+                        uiHandler.postDelayed(stopAfterHold, 1_000L)
                     }
                     true
                 }
@@ -137,7 +137,7 @@ class MainActivity : Activity() {
                         uiHandler.removeCallbacks(stopAfterHold)
                         stopping = false
                         updateRecordButton()
-                        if (event.actionMasked == MotionEvent.ACTION_UP) toast("Kaydı durdurmak için 2 saniye basılı tutun.")
+                        if (event.actionMasked == MotionEvent.ACTION_UP) toast("Kaydı durdurmak için 1 saniye basılı tutun.")
                     }
                     true
                 }
@@ -183,7 +183,7 @@ class MainActivity : Activity() {
         root.addView(actionPanel, LinearLayout.LayoutParams(-1, -2))
 
         root.addView(TextView(this).apply {
-            text = "Telefon görüşmesinde hoparlörü açın. Kayıt, görüşme öncesinde veya sırasında başlatılabilir."
+            text = "Android, telefon görüşmesi sırasında üçüncü taraf uygulamaların mikrofonunu susturabilir; bu durumda kayıt sessiz olabilir. Görüşme kaydı için cihazınızın yerleşik çağrı kayıt özelliğini kullanın."
             textSize = 14f
             setTextColor(0xFF40364A.toInt())
             setPadding(4, 8, 4, 4)
@@ -249,7 +249,7 @@ class MainActivity : Activity() {
         if (!::recordButton.isInitialized) return
         recordButton.text = when {
             stopping -> "Kaydı Durdur"
-            recording -> "Kayıt sürüyor · durdurmak için 2 sn basılı tut"
+            recording -> "Kayıt sürüyor · durdurmak için 1 sn basılı tut"
             else -> "Kaydı Başlat"
         }
         val color = when {
