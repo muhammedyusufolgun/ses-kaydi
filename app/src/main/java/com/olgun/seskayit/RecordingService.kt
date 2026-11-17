@@ -50,6 +50,8 @@ class RecordingService : Service() {
         const val ACTION_FINISHED = "com.olgun.seskayit.FINISHED"
         const val ACTION_TRANSCRIPT = "com.olgun.seskayit.TRANSCRIPT"
         const val EXTRA_TRANSCRIPT = "transcript"
+        const val ACTION_ERROR = "com.olgun.seskayit.RECORDING_ERROR"
+        const val EXTRA_ERROR = "error"
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 17
         private const val PREFS = "recording_state"
@@ -94,7 +96,7 @@ class RecordingService : Service() {
 
     private fun recordLoop(startId: Int) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
-        val sampleRate = 16_000
+        val sampleRate = 48_000
         val minimum = AudioRecord.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -124,6 +126,7 @@ class RecordingService : Service() {
         val stopChunk = ByteArray(0)
         val transcriptionActive = AtomicBoolean(true)
         var audioSaved = false
+        var failureMessage: String? = null
 
         try {
             val audio = AudioRecord(
@@ -157,7 +160,7 @@ class RecordingService : Service() {
             }
 
             mp3Stream = FileOutputStream(temporaryAudio)
-            encoder = Mp3Encoder.open(Mp3EncoderConfig(sampleRate, 1, 96), mp3Stream)
+            encoder = Mp3Encoder.open(Mp3EncoderConfig(sampleRate, 1, 128), mp3Stream)
             audio.startRecording()
             val pcm = ByteArray(bufferSize)
             while (running.get()) {
@@ -167,7 +170,7 @@ class RecordingService : Service() {
                     if (alignedCount > 0) {
                         val frame = if (alignedCount == pcm.size) pcm.copyOf() else pcm.copyOf(alignedCount)
                         encoder.writePcm16Le(frame)
-                        if (transcriptionActive.get()) transcriptQueue.offer(frame)
+                        if (transcriptionActive.get()) transcriptQueue.offer(downsample48To16(frame))
                     }
                 }
             }
@@ -201,7 +204,9 @@ class RecordingService : Service() {
                 }
             }
         } catch (error: Exception) {
-            publishTranscriptIfEmpty(error.message ?: "Kayıt başlatılamadı.")
+            failureMessage = error.localizedMessage ?: "Mikrofon kaydı başlatılamadı."
+            sendBroadcast(Intent(ACTION_ERROR).setPackage(packageName).putExtra(EXTRA_ERROR, failureMessage))
+            publishTranscriptIfEmpty(failureMessage ?: "Mikrofon kaydı başlatılamadı.")
         } finally {
             running.set(false)
             try { capture?.stop() } catch (_: Exception) {}
@@ -221,6 +226,25 @@ class RecordingService : Service() {
             if (!audioSaved) temporaryTranscript.delete()
             finishService(startId)
         }
+    }
+
+    private fun downsample48To16(input: ByteArray): ByteArray {
+        val sampleCount = input.size / 2
+        val outputSamples = sampleCount / 3
+        val output = ByteArray(outputSamples * 2)
+        for (i in 0 until outputSamples) {
+            val base = i * 6
+            val a = (input[base].toInt() and 0xFF) or (input[base + 1].toInt() shl 8)
+            val b = (input[base + 2].toInt() and 0xFF) or (input[base + 3].toInt() shl 8)
+            val c = (input[base + 4].toInt() and 0xFF) or (input[base + 5].toInt() shl 8)
+            val sa = if (a >= 32768) a - 65536 else a
+            val sb = if (b >= 32768) b - 65536 else b
+            val sc = if (c >= 32768) c - 65536 else c
+            val value = ((sa + sb + sc) / 3).coerceIn(-32768, 32767)
+            output[i * 2] = (value and 0xFF).toByte()
+            output[i * 2 + 1] = ((value shr 8) and 0xFF).toByte()
+        }
+        return output
     }
 
     private suspend fun runSpeechRecognition(audioSource: AudioSource?) {
