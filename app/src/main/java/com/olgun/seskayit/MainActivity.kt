@@ -84,11 +84,6 @@ class MainActivity : Activity() {
             startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
         }
     }
-    private val serviceError = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            toast(intent?.getStringExtra(RecordingService.EXTRA_ERROR) ?: "Kayıt başlatılamadı.")
-        }
-    }
     private val transcriptUpdates = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             liveTranscript.text = intent?.getStringExtra(RecordingService.EXTRA_TRANSCRIPT).orEmpty().ifBlank { "Konuşma algılanıyor…" }
@@ -114,9 +109,6 @@ class MainActivity : Activity() {
         val filter = IntentFilter(RecordingService.ACTION_FINISHED)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(finished, filter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(finished, filter)
-        val errorFilter = IntentFilter(RecordingService.ACTION_ERROR)
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(serviceError, errorFilter, RECEIVER_NOT_EXPORTED)
-        else registerReceiver(serviceError, errorFilter)
         val transcriptFilter = IntentFilter(RecordingService.ACTION_TRANSCRIPT)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(transcriptUpdates, transcriptFilter, RECEIVER_NOT_EXPORTED)
         else registerReceiver(transcriptUpdates, transcriptFilter)
@@ -144,7 +136,6 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         try { unregisterReceiver(finished) } catch (_: Exception) {}
         try { unregisterReceiver(transcriptUpdates) } catch (_: Exception) {}
-        try { unregisterReceiver(serviceError) } catch (_: Exception) {}
         uiHandler.removeCallbacksAndMessages(null)
         player?.release()
         player = null
@@ -331,14 +322,13 @@ class MainActivity : Activity() {
                     recording = false
                     updateRecordButton()
                     updateRecordingPanels()
-                    toast("Kayıt servisi başlayamadı. Mikrofon iznini ve uygulama ayarlarını kontrol edin.")
                 }
             }, 2_000L)
         } catch (error: Exception) {
             recording = false
             updateRecordButton()
             updateRecordingPanels()
-            toast("Kayıt başlatılamadı: " + (error.localizedMessage ?: "Mikrofon iznini kontrol edin."))
+            // Keep the recording control ready for another immediate attempt.
         }
     }
 
