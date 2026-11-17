@@ -101,6 +101,7 @@ class RecordingService : Service() {
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
         if (minimum <= 0) {
+            sendBroadcast(Intent(ACTION_ERROR).setPackage(packageName).putExtra(EXTRA_ERROR, "Bu cihazın mikrofonu için kayıt biçimi başlatılamadı."))
             finishService(startId)
             return
         }
