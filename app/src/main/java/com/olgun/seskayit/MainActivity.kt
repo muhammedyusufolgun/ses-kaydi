@@ -3,6 +3,8 @@ package com.olgun.seskayit
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
 import android.provider.DocumentsContract
 import android.net.Uri
 import android.content.ClipData
@@ -39,6 +41,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.OutputStream
 import java.util.Locale
 
 class MainActivity : Activity() {
@@ -54,7 +57,10 @@ class MainActivity : Activity() {
     private lateinit var transcriptPanel: LinearLayout
     private lateinit var transcriptTextView: TextView
     private lateinit var transcriptCopyButton: Button
+    private lateinit var transcriptPdfButton: Button
     private var displayedTranscriptFile: File? = null
+    private var pendingPdfText: String? = null
+    private var pendingPdfName: String = "Ses-kaydi-metni.pdf"
     private val durationCache = mutableMapOf<String, String>()
     private lateinit var recordingsPanel: LinearLayout
     private lateinit var livePanel: LinearLayout
@@ -276,10 +282,24 @@ class MainActivity : Activity() {
             minWidth = 0
             minimumHeight = 32
             setPadding(8, 0, 8, 0)
-            setBackgroundColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(0xFFE0E0E0.toInt())
             setTextColor(0xFF202020.toInt())
         }
-        transcriptToolbar.addView(transcriptCopyButton, LinearLayout.LayoutParams(-2, 34))
+        transcriptToolbar.addView(transcriptCopyButton, LinearLayout.LayoutParams(-2, 34).apply { marginEnd = 6 })
+        transcriptPdfButton = Button(this).apply {
+            text = "PDF olarak aktar"
+            textSize = 10f
+            minWidth = 0
+            minimumHeight = 32
+            setPadding(6, 0, 6, 0)
+            setBackgroundColor(0xFFE0E0E0.toInt())
+            setTextColor(0xFF202020.toInt())
+            setOnClickListener {
+                flashTranscriptButton(this)
+                exportTranscriptPdf()
+            }
+        }
+        transcriptToolbar.addView(transcriptPdfButton, LinearLayout.LayoutParams(-2, 34))
         transcriptPanel.addView(transcriptToolbar, LinearLayout.LayoutParams(-1, -2))
         transcriptTextView = TextView(this).apply {
             textSize = 16f
@@ -451,11 +471,17 @@ class MainActivity : Activity() {
         transcriptTextView.parent?.let { (it as? ScrollView)?.scrollTo(0, 0) }
     }
 
+    private fun flashTranscriptButton(button: Button) {
+        button.setBackgroundColor(0xFFB9EFC4.toInt())
+        uiHandler.postDelayed({ button.setBackgroundColor(0xFFE0E0E0.toInt()) }, 500L)
+    }
+
     private fun setCopyOnTouch(button: Button, closePanelAfterCopy: Boolean = false, textProvider: () -> String) {
         button.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     view.isPressed = true
+                    if (button === transcriptCopyButton) flashTranscriptButton(button)
                     if (copyTranscript(textProvider())) {
                         view.performHapticFeedback(
                             if (Build.VERSION.SDK_INT >= 30) android.view.HapticFeedbackConstants.CONFIRM
@@ -477,6 +503,74 @@ class MainActivity : Activity() {
                 else -> true
             }
         }
+    }
+
+    private fun exportTranscriptPdf() {
+        val text = transcriptTextView.text?.toString().orEmpty()
+        if (text.isBlank() || text == "Metin hazırlanıyor…") {
+            toast("Aktarılacak metin henüz hazır değil.")
+            return
+        }
+        pendingPdfText = text
+        val base = displayedTranscriptFile?.nameWithoutExtension ?: "Ses-kaydi-metni"
+        pendingPdfName = "$base.pdf"
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/pdf"
+            putExtra(Intent.EXTRA_TITLE, pendingPdfName)
+        }
+        try {
+            startActivityForResult(intent, 31)
+        } catch (_: Exception) {
+            pendingPdfText = null
+            toast("PDF kaydetme ekranı açılamadı.")
+        }
+    }
+
+    private fun writeTranscriptPdf(output: OutputStream, text: String) {
+        val document = PdfDocument()
+        val pageWidth = 595
+        val pageHeight = 842
+        val margin = 40f
+        val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.BLACK
+            textSize = 12f
+        }
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.BLACK
+            textSize = 15f
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        }
+        val lines = mutableListOf<String>()
+        text.split('\n').forEach { paragraph ->
+            if (paragraph.isBlank()) {
+                lines.add("")
+            } else {
+                var line = ""
+                paragraph.trim().split(Regex("\\s+")).forEach { word ->
+                    val candidate = if (line.isEmpty()) word else "$line $word"
+                    if (line.isNotEmpty() && bodyPaint.measureText(candidate) > pageWidth - margin * 2) {
+                        lines.add(line)
+                        line = word
+                    } else line = candidate
+                }
+                if (line.isNotEmpty()) lines.add(line)
+            }
+        }
+        val linesPerPage = 42
+        val chunks = lines.chunked(linesPerPage).ifEmpty { listOf(listOf("")) }
+        chunks.forEachIndexed { index, pageLines ->
+            val page = document.startPage(PdfDocument.PageInfo.Builder(pageWidth, pageHeight, index + 1).create())
+            page.canvas.drawText("Ses Kaydı - Metin", margin, 35f, titlePaint)
+            var y = 62f
+            pageLines.forEach { line ->
+                if (line.isNotEmpty()) page.canvas.drawText(line, margin, y, bodyPaint)
+                y += 18f
+            }
+            document.finishPage(page)
+        }
+        document.writeTo(output)
+        document.close()
     }
 
     private fun copyTranscript(text: String): Boolean {
@@ -701,6 +795,18 @@ class MainActivity : Activity() {
                 contentResolver.openOutputStream(data.data!!)?.use { output -> exportFile!!.inputStream().use { it.copyTo(output) } }
                 toast("MP3 dışa aktarıldı.")
             } catch (_: Exception) { toast("Dışa aktarma başarısız oldu.") }
+        } else if (requestCode == 31 && resultCode == RESULT_OK && data?.data != null) {
+            val text = pendingPdfText
+            try {
+                if (text != null) contentResolver.openOutputStream(data.data!!)?.use { output -> writeTranscriptPdf(output, text) }
+                toast("Metin PDF olarak kaydedildi.")
+            } catch (_: Exception) {
+                toast("PDF kaydedilemedi.")
+            } finally {
+                pendingPdfText = null
+            }
+        } else if (requestCode == 31) {
+            pendingPdfText = null
         }
     }
 
